@@ -3,112 +3,88 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>我的台股精算看板</title>
-    
+    <title>台股精算 - 管理模式</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="台股精算">
     <meta name="theme-color" content="#4f46e5">
-    
-    <link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIwIiBmaWxsPSIjNGY0NmU1Ii8+PHBhdGggZD0iTTMwLDUwIEw0NSw2NSBMNzAsMzUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iOCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+">
-    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIwIiBmaWxsPSIjNGY0NmU1Ii8+PHBhdGggZD0iTTMwLDUwIEw0NSw2NSBMNzAsMzUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iOCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+">
-
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .profit-pos { color: #ef4444; font-weight: bold; }
-        .profit-neg { color: #22c55e; font-weight: bold; }
-        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; }
-        /* 防止手機端表格滑動影響整個頁面 */
-        .table-container { -webkit-overflow-scrolling: touch; }
-        body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+        .profit-pos { color: #ef4444; }
+        .profit-neg { color: #22c55e; }
+        @keyframes flash-up { from { background-color: rgba(239, 68, 68, 0.2); } to { background-color: transparent; } }
+        @keyframes flash-down { from { background-color: rgba(34, 197, 94, 0.2); } to { background-color: transparent; } }
+        .price-up { animation: flash-up 1s ease-out; }
+        .price-down { animation: flash-down 1s ease-out; }
+        .live-dot { width: 8px; height: 8px; background-color: #ef4444; border-radius: 50%; display: inline-block; margin-right: 4px; animation: blink 1s infinite; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+        /* 隱藏捲軸但保持功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
     </style>
 </head>
-<body class="bg-slate-100 text-slate-800 antialiased font-sans">
-    <div class="p-4 md:p-8">
-        <div class="flex items-center justify-between mb-6">
-            <h1 class="text-2xl font-extrabold text-slate-950">台股精算 App</h1>
-            <div class="flex gap-2">
-                <button onclick="fetchAllPrices()" class="bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-700 transition shadow">
-                    🔄 行情
-                </button>
-                <button onclick="toggleSettings()" class="bg-slate-200 text-slate-600 p-3 rounded-xl hover:bg-slate-300">
-                    ⚙️
-                </button>
+<body class="bg-slate-50 text-slate-900 antialiased pb-32">
+    <div class="max-w-md mx-auto p-4">
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h1 class="text-xl font-bold flex items-center"><span class="live-dot"></span> 實時監控</h1>
+                <p id="last-update" class="text-[10px] text-slate-400 font-mono">最後更新: --:--:--</p>
+            </div>
+            <button onclick="fetchAllPrices()" class="bg-white border shadow-sm p-2 rounded-lg">🔄</button>
+        </div>
+
+        <div class="bg-indigo-600 p-6 rounded-3xl shadow-xl text-white mb-6">
+            <p class="text-indigo-200 text-xs font-medium mb-1">總資產淨值</p>
+            <h2 id="total-value" class="text-3xl font-black font-mono">NT$ 0</h2>
+            <div class="flex gap-3 mt-3">
+                <span id="total-profit" class="text-sm font-bold bg-white/20 px-2 py-1 rounded-lg">--</span>
+                <span id="total-percent" class="text-sm font-bold bg-white/20 px-2 py-1 rounded-lg">--%</span>
             </div>
         </div>
 
-        <div id="settings-panel" class="hidden bg-white p-5 rounded-2xl shadow-sm border mb-6">
-            <h3 class="font-bold mb-3">設定</h3>
-            <label class="block text-sm font-medium text-slate-500 mb-1">手續費折扣 (如 2.8 折輸入 2.8)</label>
-            <input type="number" id="fee-discount" value="6" onchange="render()" class="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-indigo-300">
-        </div>
+        <div id="stock-container" class="space-y-4"></div>
 
-        <div class="grid grid-cols-1 gap-4 mb-6">
-            <div class="bg-white p-5 rounded-2xl shadow-sm border">
-                <p class="text-slate-400 text-xs font-medium uppercase tracking-wider">總資產淨值</p>
-                <p id="total-value" class="text-3xl font-mono font-bold mt-1 text-slate-950">NT$ 0</p>
-                <div class="flex items-center gap-2 mt-2">
-                    <p id="total-profit" class="font-mono text-base font-medium">NT$ 0</p>
-                    <p id="total-percent" class="font-mono text-base font-medium">0.00%</p>
+        <div class="fixed bottom-6 left-0 right-0 px-4">
+            <details class="max-w-md mx-auto bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+                <summary class="list-none p-4 text-center font-bold text-indigo-600 cursor-pointer active:bg-slate-50">➕ 新增持股紀錄</summary>
+                <div class="p-4 space-y-3 border-t bg-slate-50">
+                    <input type="text" id="s-code" placeholder="股票代碼 (如 2330)" class="w-full bg-white border p-3 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
+                    <div class="grid grid-cols-2 gap-2">
+                        <input type="number" id="s-shares" placeholder="買入股數" class="bg-white border p-3 rounded-xl outline-none">
+                        <input type="number" id="s-cost" placeholder="買入單價" class="bg-white border p-3 rounded-xl outline-none">
+                    </div>
+                    <button onclick="addTransaction()" class="w-full bg-indigo-600 text-white p-4 rounded-xl font-bold shadow-lg">確認存入</button>
                 </div>
-            </div>
+            </details>
         </div>
+    </div>
 
-        <details class="bg-white p-5 rounded-2xl shadow-sm border mb-6 group">
-            <summary class="list-none cursor-pointer flex justify-between items-center font-bold text-lg text-slate-900">
-                <span>➕ 登錄新交易</span>
-                <span class="text-indigo-600 font-black group-open:rotate-180 transition-transform">↓</span>
-            </summary>
-            <div class="space-y-4 pt-4 mt-4 border-t border-slate-100">
-                <input type="text" id="s-code" placeholder="股票代碼 (例如 2330)" class="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
-                <div class="grid grid-cols-2 gap-3">
-                    <input type="number" id="s-shares" placeholder="買入股數" class="w-full border p-3 rounded-xl outline-none">
-                    <input type="number" id="s-cost" placeholder="買入單價" class="w-full border p-3 rounded-xl outline-none">
-                </div>
-                <button onclick="addTransaction()" class="w-full bg-slate-950 text-white p-4 rounded-xl font-bold hover:bg-slate-800 transition">新增至庫存</button>
+    <div id="edit-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end">
+        <div class="bg-white w-full rounded-t-3xl p-6 pb-12 animate-slide-up">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="modal-title" class="text-xl font-black">詳細紀錄</h3>
+                <button onclick="closeModal()" class="text-slate-400 text-2xl">✕</button>
             </div>
-        </details>
-
-        <div class="table-container bg-white rounded-2xl shadow-sm border overflow-x-auto">
-            <table class="w-full text-left table-auto min-w-[340px]">
-                <thead class="bg-slate-50 border-b">
-                    <tr class="text-xs text-slate-500 tracking-wider">
-                        <th class="p-4 font-medium">股票</th>
-                        <th class="p-4 font-medium text-right">股數</th>
-                        <th class="p-4 font-medium text-right">現價</th>
-                        <th class="p-4 font-medium text-right">淨損益/報酬</th>
-                    </tr>
-                </thead>
-                <tbody id="inventory-list" class="divide-y divide-slate-100 text-sm"></tbody>
-            </table>
+            <div id="modal-content" class="space-y-3 max-h-[60vh] overflow-y-auto no-scrollbar"></div>
         </div>
-        
-        <p class="text-center text-xs text-slate-400 mt-10">資料來源：Yahoo Finance (延遲約 20 分鐘)</p>
     </div>
 
     <script>
-        // JS 邏輯不變，保持 V3 精算版
         let transactions = JSON.parse(localStorage.getItem('stock_tx_v3')) || [];
         let currentPrices = JSON.parse(localStorage.getItem('stock_prices_v3')) || {};
+        let oldPrices = {};
 
-        function getTaxRate(code) { return code.startsWith('00') ? 0.001 : 0.003; }
-        function calculateFee(amount, discount) { return Math.max(20, Math.floor(amount * 0.001425 * (discount / 10))); }
-        function toggleSettings() { document.getElementById('settings-panel').classList.toggle('hidden'); }
+        const getTaxRate = (code) => code.startsWith('00') ? 0.001 : 0.003;
+        const calculateFee = (amount) => Math.max(20, Math.floor(amount * 0.001425 * 0.6));
 
         function addTransaction() {
             const code = document.getElementById('s-code').value.trim();
             const shares = parseFloat(document.getElementById('s-shares').value);
             const cost = parseFloat(document.getElementById('s-cost').value);
-            const discount = parseFloat(document.getElementById('fee-discount').value);
-
-            if (code && shares > 0 && cost > 0) {
-                transactions.push({ code, shares, cost, totalCost: (shares * cost) + calculateFee(shares * cost, discount) });
+            if (code && shares && cost) {
+                transactions.push({ id: Date.now(), code, shares, cost, totalCost: (shares * cost) + calculateFee(shares * cost) });
                 localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
+                document.getElementById('s-code').value = '';
+                document.querySelector('details').open = false;
                 render();
                 fetchPrice(code);
-                document.getElementById('s-shares').value = '';
-                document.getElementById('s-cost').value = '';
-                document.querySelector('details').open = false; // 關閉輸入框
             }
         }
 
@@ -118,64 +94,106 @@
             try {
                 const res = await fetch(url);
                 const data = await res.json();
-                currentPrices[code] = data.chart.result[0].meta.regularMarketPrice;
+                const newPrice = data.chart.result[0].meta.regularMarketPrice;
+                oldPrices[code] = currentPrices[code];
+                currentPrices[code] = newPrice;
                 localStorage.setItem('stock_prices_v3', JSON.stringify(currentPrices));
                 render();
-            } catch (e) { console.error("抓取失敗"); }
+            } catch (e) { console.error(code + " 更新失敗"); }
         }
 
         function fetchAllPrices() {
             [...new Set(transactions.map(t => t.code))].forEach(code => fetchPrice(code));
+            document.getElementById('last-update').innerText = `最後更新: ${new Date().toLocaleTimeString()}`;
         }
 
         function render() {
-            const list = document.getElementById('inventory-list');
-            const discount = parseFloat(document.getElementById('fee-discount').value);
-            list.innerHTML = '';
-            
+            const container = document.getElementById('stock-container');
+            container.innerHTML = '';
             const summary = {};
             transactions.forEach(tx => {
-                if (!summary[tx.code]) summary[tx.code] = { totalShares: 0, totalCostWithFee: 0 };
+                if (!summary[tx.code]) summary[tx.code] = { totalShares: 0, totalCostAmount: 0 };
                 summary[tx.code].totalShares += tx.shares;
-                summary[tx.code].totalCostWithFee += tx.totalCost;
+                summary[tx.code].totalCostAmount += tx.totalCost;
             });
 
-            let gTotalNetValue = 0, gTotalCostWithFee = 0;
-
+            let gTotalValue = 0, gTotalCost = 0;
             Object.keys(summary).sort().forEach(code => {
                 const s = summary[code];
-                const currentPrice = currentPrices[code] || 0;
-                const sellAmount = s.totalShares * currentPrice;
-                const netSaleValue = sellAmount - calculateFee(sellAmount, discount) - Math.floor(sellAmount * getTaxRate(code));
-                const netProfit = netSaleValue - s.totalCostWithFee;
+                const price = currentPrices[code] || 0;
+                const sellValue = (s.totalShares * price) - calculateFee(s.totalShares * price) - Math.floor(s.totalShares * price * getTaxRate(code));
+                const profit = sellValue - s.totalCostAmount;
+                const pct = (profit / s.totalCostAmount * 100).toFixed(2);
+                gTotalValue += sellValue; gTotalCost += s.totalCostAmount;
 
-                gTotalNetValue += netSaleValue; gTotalCostWithFee += s.totalCostWithFee;
+                let flashClass = (oldPrices[code] && price > oldPrices[code]) ? "price-up" : (oldPrices[code] && price < oldPrices[code] ? "price-down" : "");
 
-                list.innerHTML += `
-                    <tr>
-                        <td class="p-4"><span class="font-bold text-base text-slate-950">${code}</span><br><span class="text-[10px] text-slate-400">均:${(s.totalCostWithFee/s.totalShares).toFixed(2)}</span></td>
-                        <td class="p-4 text-right font-mono font-medium">${s.totalShares.toLocaleString()}</td>
-                        <td class="p-4 text-right font-mono font-bold text-slate-900">${currentPrice}</td>
-                        <td class="p-4 text-right">
-                            <div class="${netProfit >= 0 ? 'profit-pos' : 'profit-neg'} font-mono text-sm">
-                                ${netProfit >= 0 ? '+' : ''}${Math.round(netProfit).toLocaleString()}<br>
-                                <span class="text-xs font-normal">${((netProfit/s.totalCostWithFee)*100).toFixed(2)}%</span>
+                container.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center ${flashClass}">
+                        <div onclick="openEditModal('${code}')" class="flex-1 cursor-pointer">
+                            <p class="text-lg font-black">${code} <span class="text-[10px] text-indigo-500 font-normal">詳細 ▸</span></p>
+                            <p class="text-[10px] text-slate-400">持股: ${s.totalShares.toLocaleString()} | 均價: ${(s.totalCostAmount/s.totalShares).toFixed(1)}</p>
+                        </div>
+                        <div class="text-right flex items-center gap-3">
+                            <div>
+                                <p class="text-xl font-mono font-bold">${price.toFixed(2)}</p>
+                                <p class="text-xs font-bold ${profit >= 0 ? 'profit-pos' : 'profit-neg'}">${profit >= 0 ? '+' : ''}${Math.round(profit).toLocaleString()} (${pct}%)</p>
                             </div>
-                        </td>
-                    </tr>
+                            <button onclick="confirmDeleteCode('${code}')" class="text-slate-200 hover:text-red-400 p-2 text-xl">✕</button>
+                        </div>
+                    </div>
                 `;
             });
 
-            document.getElementById('total-value').innerText = `NT$ ${Math.round(gTotalNetValue).toLocaleString()}`;
-            const gNetProfit = gTotalNetValue - gTotalCostWithFee;
-            const pEl = document.getElementById('total-profit');
-            pEl.innerText = `${gNetProfit >= 0 ? '賺 ' : '賠 '} NT$ ${Math.abs(Math.round(gNetProfit)).toLocaleString()}`;
-            pEl.className = `font-mono text-base ${gNetProfit >= 0 ? 'profit-pos' : 'profit-neg'}`;
-            const rEl = document.getElementById('total-percent');
-            rEl.innerText = `${gTotalCostWithFee === 0 ? 0 : ((gNetProfit/gTotalCostWithFee)*100).toFixed(2)}%`;
-            rEl.className = `font-mono text-base ${gNetProfit >= 0 ? 'profit-pos' : 'profit-neg'}`;
+            document.getElementById('total-value').innerText = `NT$ ${Math.round(gTotalValue).toLocaleString()}`;
+            const totalProfit = gTotalValue - gTotalCost;
+            document.getElementById('total-profit').innerText = `${totalProfit >= 0 ? '+' : ''}${Math.round(totalProfit).toLocaleString()}`;
+            document.getElementById('total-percent').innerText = `${gTotalCost === 0 ? 0 : (totalProfit / gTotalCost * 100).toFixed(2)}%`;
         }
 
+        function openEditModal(code) {
+            const modal = document.getElementById('edit-modal');
+            const content = document.getElementById('modal-content');
+            document.getElementById('modal-title').innerText = `${code} 歷史交易`;
+            
+            const records = transactions.filter(t => t.code === code);
+            content.innerHTML = records.map(r => `
+                <div class="flex justify-between items-center bg-slate-50 p-4 rounded-xl">
+                    <div>
+                        <p class="text-sm font-bold">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
+                        <p class="text-[10px] text-slate-400">${new Date(r.id).toLocaleDateString()}</p>
+                    </div>
+                    <button onclick="deleteTransaction(${r.id})" class="text-red-500 text-sm font-medium">刪除此筆</button>
+                </div>
+            `).join('');
+            
+            modal.classList.remove('hidden');
+        }
+
+        function deleteTransaction(id) {
+            if(confirm('確定刪除這筆交易紀錄？')) {
+                transactions = transactions.filter(t => t.id !== id);
+                localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
+                render();
+                if (transactions.length === 0 || !transactions.some(t => t.code === document.getElementById('modal-title').innerText.split(' ')[0])) {
+                    closeModal();
+                } else {
+                    openEditModal(document.getElementById('modal-title').innerText.split(' ')[0]);
+                }
+            }
+        }
+
+        function confirmDeleteCode(code) {
+            if(confirm(`確定清空 ${code} 的所有持股紀錄？`)) {
+                transactions = transactions.filter(t => t.code !== code);
+                localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
+                render();
+            }
+        }
+
+        function closeModal() { document.getElementById('edit-modal').classList.add('hidden'); }
+
+        setInterval(fetchAllPrices, 30000);
         render();
         if(transactions.length > 0) fetchAllPrices();
     </script>
