@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>我的台股精算看板</title>
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="台股精算">
+    <meta name="theme-color" content="#4f46e5">
+    
+    <link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIwIiBmaWxsPSIjNGY0NmU1Ii8+PHBhdGggZD0iTTMwLDUwIEw0NSw2NSBMNzAsMzUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iOCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+">
+    <link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48cmVjdCB3aWR0aD0iMTAwIiBoZWlnaHQ9IjEwMCIgcng9IjIwIiBmaWxsPSIjNGY0NmU1Ii8+PHBhdGggZD0iTTMwLDUwIEw0NSw2NSBMNzAsMzUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iOCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PC9zdmc+">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .profit-pos { color: #ef4444; font-weight: bold; }
+        .profit-neg { color: #22c55e; font-weight: bold; }
+        input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; }
+        /* 防止手機端表格滑動影響整個頁面 */
+        .table-container { -webkit-overflow-scrolling: touch; }
+        body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased font-sans">
+    <div class="p-4 md:p-8">
+        <div class="flex items-center justify-between mb-6">
+            <h1 class="text-2xl font-extrabold text-slate-950">台股精算 App</h1>
+            <div class="flex gap-2">
+                <button onclick="fetchAllPrices()" class="bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-700 transition shadow">
+                    🔄 行情
+                </button>
+                <button onclick="toggleSettings()" class="bg-slate-200 text-slate-600 p-3 rounded-xl hover:bg-slate-300">
+                    ⚙️
+                </button>
+            </div>
+        </div>
+
+        <div id="settings-panel" class="hidden bg-white p-5 rounded-2xl shadow-sm border mb-6">
+            <h3 class="font-bold mb-3">設定</h3>
+            <label class="block text-sm font-medium text-slate-500 mb-1">手續費折扣 (如 2.8 折輸入 2.8)</label>
+            <input type="number" id="fee-discount" value="6" onchange="render()" class="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-indigo-300">
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 mb-6">
+            <div class="bg-white p-5 rounded-2xl shadow-sm border">
+                <p class="text-slate-400 text-xs font-medium uppercase tracking-wider">總資產淨值</p>
+                <p id="total-value" class="text-3xl font-mono font-bold mt-1 text-slate-950">NT$ 0</p>
+                <div class="flex items-center gap-2 mt-2">
+                    <p id="total-profit" class="font-mono text-base font-medium">NT$ 0</p>
+                    <p id="total-percent" class="font-mono text-base font-medium">0.00%</p>
+                </div>
+            </div>
+        </div>
+
+        <details class="bg-white p-5 rounded-2xl shadow-sm border mb-6 group">
+            <summary class="list-none cursor-pointer flex justify-between items-center font-bold text-lg text-slate-900">
+                <span>➕ 登錄新交易</span>
+                <span class="text-indigo-600 font-black group-open:rotate-180 transition-transform">↓</span>
+            </summary>
+            <div class="space-y-4 pt-4 mt-4 border-t border-slate-100">
+                <input type="text" id="s-code" placeholder="股票代碼 (例如 2330)" class="w-full border p-3 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
+                <div class="grid grid-cols-2 gap-3">
+                    <input type="number" id="s-shares" placeholder="買入股數" class="w-full border p-3 rounded-xl outline-none">
+                    <input type="number" id="s-cost" placeholder="買入單價" class="w-full border p-3 rounded-xl outline-none">
+                </div>
+                <button onclick="addTransaction()" class="w-full bg-slate-950 text-white p-4 rounded-xl font-bold hover:bg-slate-800 transition">新增至庫存</button>
+            </div>
+        </details>
+
+        <div class="table-container bg-white rounded-2xl shadow-sm border overflow-x-auto">
+            <table class="w-full text-left table-auto min-w-[340px]">
+                <thead class="bg-slate-50 border-b">
+                    <tr class="text-xs text-slate-500 tracking-wider">
+                        <th class="p-4 font-medium">股票</th>
+                        <th class="p-4 font-medium text-right">股數</th>
+                        <th class="p-4 font-medium text-right">現價</th>
+                        <th class="p-4 font-medium text-right">淨損益/報酬</th>
+                    </tr>
+                </thead>
+                <tbody id="inventory-list" class="divide-y divide-slate-100 text-sm"></tbody>
+            </table>
+        </div>
+        
+        <p class="text-center text-xs text-slate-400 mt-10">資料來源：Yahoo Finance (延遲約 20 分鐘)</p>
+    </div>
+
+    <script>
+        // JS 邏輯不變，保持 V3 精算版
+        let transactions = JSON.parse(localStorage.getItem('stock_tx_v3')) || [];
+        let currentPrices = JSON.parse(localStorage.getItem('stock_prices_v3')) || {};
+
+        function getTaxRate(code) { return code.startsWith('00') ? 0.001 : 0.003; }
+        function calculateFee(amount, discount) { return Math.max(20, Math.floor(amount * 0.001425 * (discount / 10))); }
+        function toggleSettings() { document.getElementById('settings-panel').classList.toggle('hidden'); }
+
+        function addTransaction() {
+            const code = document.getElementById('s-code').value.trim();
+            const shares = parseFloat(document.getElementById('s-shares').value);
+            const cost = parseFloat(document.getElementById('s-cost').value);
+            const discount = parseFloat(document.getElementById('fee-discount').value);
+
+            if (code && shares > 0 && cost > 0) {
+                transactions.push({ code, shares, cost, totalCost: (shares * cost) + calculateFee(shares * cost, discount) });
+                localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
+                render();
+                fetchPrice(code);
+                document.getElementById('s-shares').value = '';
+                document.getElementById('s-cost').value = '';
+                document.querySelector('details').open = false; // 關閉輸入框
+            }
+        }
+
+        async function fetchPrice(code) {
+            const symbol = code + (code.length === 4 ? ".TW" : ".TWO");
+            const url = `https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`;
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                currentPrices[code] = data.chart.result[0].meta.regularMarketPrice;
+                localStorage.setItem('stock_prices_v3', JSON.stringify(currentPrices));
+                render();
+            } catch (e) { console.error("抓取失敗"); }
+        }
+
+        function fetchAllPrices() {
+            [...new Set(transactions.map(t => t.code))].forEach(code => fetchPrice(code));
+        }
+
+        function render() {
+            const list = document.getElementById('inventory-list');
+            const discount = parseFloat(document.getElementById('fee-discount').value);
+            list.innerHTML = '';
+            
+            const summary = {};
+            transactions.forEach(tx => {
+                if (!summary[tx.code]) summary[tx.code] = { totalShares: 0, totalCostWithFee: 0 };
+                summary[tx.code].totalShares += tx.shares;
+                summary[tx.code].totalCostWithFee += tx.totalCost;
+            });
+
+            let gTotalNetValue = 0, gTotalCostWithFee = 0;
+
+            Object.keys(summary).sort().forEach(code => {
+                const s = summary[code];
+                const currentPrice = currentPrices[code] || 0;
+                const sellAmount = s.totalShares * currentPrice;
+                const netSaleValue = sellAmount - calculateFee(sellAmount, discount) - Math.floor(sellAmount * getTaxRate(code));
+                const netProfit = netSaleValue - s.totalCostWithFee;
+
+                gTotalNetValue += netSaleValue; gTotalCostWithFee += s.totalCostWithFee;
+
+                list.innerHTML += `
+                    <tr>
+                        <td class="p-4"><span class="font-bold text-base text-slate-950">${code}</span><br><span class="text-[10px] text-slate-400">均:${(s.totalCostWithFee/s.totalShares).toFixed(2)}</span></td>
+                        <td class="p-4 text-right font-mono font-medium">${s.totalShares.toLocaleString()}</td>
+                        <td class="p-4 text-right font-mono font-bold text-slate-900">${currentPrice}</td>
+                        <td class="p-4 text-right">
+                            <div class="${netProfit >= 0 ? 'profit-pos' : 'profit-neg'} font-mono text-sm">
+                                ${netProfit >= 0 ? '+' : ''}${Math.round(netProfit).toLocaleString()}<br>
+                                <span class="text-xs font-normal">${((netProfit/s.totalCostWithFee)*100).toFixed(2)}%</span>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById('total-value').innerText = `NT$ ${Math.round(gTotalNetValue).toLocaleString()}`;
+            const gNetProfit = gTotalNetValue - gTotalCostWithFee;
+            const pEl = document.getElementById('total-profit');
+            pEl.innerText = `${gNetProfit >= 0 ? '賺 ' : '賠 '} NT$ ${Math.abs(Math.round(gNetProfit)).toLocaleString()}`;
+            pEl.className = `font-mono text-base ${gNetProfit >= 0 ? 'profit-pos' : 'profit-neg'}`;
+            const rEl = document.getElementById('total-percent');
+            rEl.innerText = `${gTotalCostWithFee === 0 ? 0 : ((gNetProfit/gTotalCostWithFee)*100).toFixed(2)}%`;
+            rEl.className = `font-mono text-base ${gNetProfit >= 0 ? 'profit-pos' : 'profit-neg'}`;
+        }
+
+        render();
+        if(transactions.length > 0) fetchAllPrices();
+    </script>
+</body>
+</html>
