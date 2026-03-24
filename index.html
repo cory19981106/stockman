@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>我的台股精算 - 實時監控</title>
+    <title>我的台股精算 - 重新設定</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#4f46e5">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .profit-pos { color: #ef4444; } /* 台灣習慣：紅漲 */
-        .profit-neg { color: #22c55e; } /* 台灣習慣：綠跌 */
+        .profit-pos { color: #ef4444; }
+        .profit-neg { color: #22c55e; }
         @keyframes flash-up { from { background-color: rgba(239, 68, 68, 0.2); } to { background-color: transparent; } }
         @keyframes flash-down { from { background-color: rgba(34, 197, 94, 0.2); } to { background-color: transparent; } }
         .price-up { animation: flash-up 1s ease-out; }
@@ -25,7 +25,7 @@
     <div class="max-w-md mx-auto p-4 flex justify-between items-center">
         <div>
             <h1 class="text-xl font-black flex items-center"><span class="live-dot"></span> 實時監控</h1>
-            <p id="last-update" class="text-[10px] text-slate-400 font-mono">正在獲取最新報價...</p>
+            <p id="last-update" class="text-[10px] text-slate-400 font-mono">請新增股票以開始監控</p>
         </div>
         <button onclick="clearAllAndReload()" class="bg-slate-200 text-slate-500 text-xs px-3 py-2 rounded-lg font-bold">重置全部資料</button>
     </div>
@@ -46,10 +46,13 @@
         </div>
 
         <div id="page-inventory" class="space-y-4">
+            <div id="empty-hint" class="text-center py-20 text-slate-300">
+                <p class="text-4xl mb-4 text-slate-200">📭</p>
+                <p>目前沒有持股紀錄<br>請點擊下方「新增」開始</p>
             </div>
+        </div>
 
-        <div id="page-quotes" class="hidden space-y-3">
-            </div>
+        <div id="page-quotes" class="hidden space-y-3"></div>
 
         <div class="fixed bottom-6 left-0 right-0 px-4 z-20">
             <details class="max-w-md mx-auto bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
@@ -77,43 +80,13 @@
     </div>
 
     <script>
-        // --- 核心手續費計算與邏輯 ---
-        const getTaxRate = (code) => code.startsWith('00') ? 0.001 : 0.003;
-        const calculateFee = (amount) => Math.max(20, Math.floor(amount * 0.001425 * 0.6));
-
-        // --- 初始載入您的截圖數據 ---
-        const myInitialStocks = [
-            { code: "2313", shares: 10, cost: 192.5 },
-            { code: "2330", shares: 8, cost: 1912.5 },
-            { code: "3081", shares: 1, cost: 1435 },
-            { code: "3363", shares: 1, cost: 634 },
-            { code: "6257", shares: 200, cost: 127.19 },
-            { code: "6505", shares: 110, cost: 61.33 },
-            { code: "6664", shares: 10, cost: 273.5 },
-            { code: "6669", shares: 1, cost: 4000 },
-            { code: "0050", shares: 18, cost: 73.39 },
-            { code: "009816", shares: 100, cost: 11.51 }
-        ];
-
-        let transactions = JSON.parse(localStorage.getItem('stock_tx_v3'));
-        
-        // 若本地無資料，則載入截圖數據
-        if (!transactions || transactions.length === 0) {
-            transactions = myInitialStocks.map((s, i) => ({
-                id: Date.now() + i,
-                code: s.code,
-                shares: s.shares,
-                cost: s.cost,
-                totalCost: (s.shares * s.cost) + calculateFee(s.shares * s.cost)
-            }));
-            localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
-        }
-
+        // --- 初始資料已清空 ---
+        let transactions = JSON.parse(localStorage.getItem('stock_tx_v3')) || [];
         let currentPrices = JSON.parse(localStorage.getItem('stock_prices_v3')) || {};
         let oldPrices = {};
 
         function clearAllAndReload() {
-            if(confirm('確定要清空所有的持股紀錄嗎？')) {
+            if(confirm('確定要清空這台手機上所有的持股紀錄嗎？')) {
                 localStorage.clear();
                 location.reload();
             }
@@ -133,6 +106,9 @@
             }
         }
 
+        const getTaxRate = (code) => code.startsWith('00') ? 0.001 : 0.003;
+        const calculateFee = (amount) => Math.max(20, Math.floor(amount * 0.001425 * 0.6));
+
         function addTransaction() {
             const code = document.getElementById('s-code').value.trim();
             const shares = parseFloat(document.getElementById('s-shares').value);
@@ -150,8 +126,7 @@
         }
 
         async function fetchPrice(code) {
-            // 自動判斷上市或上櫃後綴
-            const suffix = (code.startsWith('6') || code.startsWith('3') || code.startsWith('8')) ? ".TWO" : ".TW";
+            const suffix = code.length === 4 ? ".TW" : (code.length === 5 ? ".TWO" : ".TW");
             const url = `https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${code}${suffix}`;
             try {
                 const res = await fetch(url);
@@ -159,26 +134,13 @@
                 const price = data.chart.result[0].meta.regularMarketPrice;
                 oldPrices[code] = currentPrices[code];
                 currentPrices[code] = price;
-                localStorage.setItem('stock_prices_v3', JSON.stringify(currentPrices));
                 render();
-            } catch (e) { 
-                // 若失敗則試試另一種後綴
-                const altSuffix = suffix === ".TW" ? ".TWO" : ".TW";
-                const altUrl = `https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${code}${altSuffix}`;
-                try {
-                    const res = await fetch(altUrl);
-                    const data = await res.json();
-                    const price = data.chart.result[0].meta.regularMarketPrice;
-                    currentPrices[code] = price;
-                    render();
-                } catch(e2) { console.error(code + " 價格獲取失敗"); }
-            }
+            } catch (e) { console.error(code + " 價格獲取失敗"); }
         }
 
         function fetchAllPrices() {
             if (transactions.length === 0) return;
-            const uniqueCodes = [...new Set(transactions.map(t => t.code))];
-            uniqueCodes.forEach(code => fetchPrice(code));
+            [...new Set(transactions.map(t => t.code))].forEach(code => fetchPrice(code));
             document.getElementById('last-update').innerText = `最後更新: ${new Date().toLocaleTimeString()}`;
         }
 
@@ -238,7 +200,6 @@
             const totalProfit = gValue - gCost;
             const pEl = document.getElementById('total-profit');
             pEl.innerText = `${totalProfit >= 0 ? '+' : ''}${Math.round(totalProfit).toLocaleString()}`;
-            pEl.style.backgroundColor = totalProfit >= 0 ? '#ef4444' : '#22c55e';
             document.getElementById('total-percent').innerText = `${gCost === 0 ? 0 : (totalProfit / gCost * 100).toFixed(2)}%`;
         }
 
@@ -251,7 +212,7 @@
                 <div class="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
                     <div>
                         <p class="text-sm font-bold text-slate-700">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
-                        <p class="text-[9px] text-slate-400">登錄序號: ${r.id}</p>
+                        <p class="text-[9px] text-slate-400">登錄時間: ${new Date(r.id).toLocaleTimeString()}</p>
                     </div>
                     <button onclick="deleteTransaction(${r.id})" class="text-red-500 text-xs font-bold">刪除</button>
                 </div>`).join('');
@@ -262,9 +223,8 @@
             transactions = transactions.filter(t => t.id !== id);
             localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
             render();
-            const currentCode = document.getElementById('modal-title').innerText.split(' ')[0];
-            if(!transactions.some(t => t.code === currentCode)) closeModal();
-            else openEditModal(currentCode);
+            if(!transactions.some(t => t.code === document.getElementById('modal-title').innerText.split(' ')[0])) closeModal();
+            else openEditModal(document.getElementById('modal-title').innerText.split(' ')[0]);
         }
 
         function confirmDeleteCode(code) {
@@ -277,8 +237,7 @@
 
         function closeModal() { document.getElementById('edit-modal').classList.add('hidden'); }
 
-        // 每 30 秒自動更新一次報價
-        setInterval(fetchAllPrices, 30000);
+        setInterval(fetchAllPrices, 20000);
         render();
         fetchAllPrices();
     </script>
