@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>我的台股精算 - 重新設定</title>
+    <title>我的台股精算 - 自動命名版</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#4f46e5">
@@ -18,6 +18,8 @@
         .live-dot { width: 8px; height: 8px; background-color: #ef4444; border-radius: 50%; display: inline-block; margin-right: 4px; animation: blink 1s infinite; }
         @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
         .tab-active { color: #4f46e5; border-bottom: 3px solid #4f46e5; }
+        .loading-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 antialiased pb-32">
@@ -25,68 +27,67 @@
     <div class="max-w-md mx-auto p-4 flex justify-between items-center">
         <div>
             <h1 class="text-xl font-black flex items-center"><span class="live-dot"></span> 實時監控</h1>
-            <p id="last-update" class="text-[10px] text-slate-400 font-mono">請新增股票以開始監控</p>
+            <p id="last-update" class="text-[10px] text-slate-400 font-mono">請新增股票以開始</p>
         </div>
-        <button onclick="clearAllAndReload()" class="bg-slate-200 text-slate-500 text-xs px-3 py-2 rounded-lg font-bold">重置全部資料</button>
+        <button onclick="clearAllData()" class="text-slate-300 text-xs font-bold">重置全部</button>
     </div>
 
-    <div class="max-w-md mx-auto flex border-b bg-white sticky top-0 z-10">
-        <button onclick="switchTab('inventory')" id="tab-inv" class="flex-1 py-4 font-bold text-slate-400 tab-active">資產庫存</button>
-        <button onclick="switchTab('quotes')" id="tab-quo" class="flex-1 py-4 font-bold text-slate-400">即時行情</button>
+    <div class="max-w-md mx-auto flex border-b bg-white sticky top-0 z-10 shadow-sm">
+        <button onclick="switchTab('inventory')" id="tab-inv" class="flex-1 py-4 font-bold text-slate-400 tab-active transition-all">資產庫存</button>
+        <button onclick="switchTab('quotes')" id="tab-quo" class="flex-1 py-4 font-bold text-slate-400 transition-all">即時行情</button>
     </div>
 
     <div class="max-w-md mx-auto p-4">
-        <div class="bg-indigo-600 p-6 rounded-3xl shadow-xl text-white mb-6">
-            <p class="text-indigo-200 text-xs font-medium mb-1">總資產估值 (Net Value)</p>
+        <div class="bg-indigo-600 p-6 rounded-[2rem] shadow-xl text-white mb-8 border border-indigo-400">
+            <p class="text-indigo-200 text-xs font-bold tracking-widest uppercase mb-1">總資產估值</p>
             <h2 id="total-value" class="text-3xl font-black font-mono tracking-tighter">NT$ 0</h2>
-            <div class="flex gap-3 mt-3">
-                <span id="total-profit" class="text-sm font-bold bg-white/20 px-3 py-1 rounded-full">--</span>
-                <span id="total-percent" class="text-sm font-bold bg-white/20 px-3 py-1 rounded-full">--%</span>
+            <div class="flex gap-2 mt-3">
+                <span id="total-profit" class="text-xs font-black bg-white/20 px-3 py-1 rounded-full">--</span>
+                <span id="total-percent" class="text-xs font-black bg-white/20 px-3 py-1 rounded-full">--%</span>
             </div>
         </div>
 
-        <div id="page-inventory" class="space-y-4">
-            <div id="empty-hint" class="text-center py-20 text-slate-300">
-                <p class="text-4xl mb-4 text-slate-200">📭</p>
-                <p>目前沒有持股紀錄<br>請點擊下方「新增」開始</p>
-            </div>
-        </div>
-
+        <div id="page-inventory" class="space-y-4"></div>
         <div id="page-quotes" class="hidden space-y-3"></div>
 
         <div class="fixed bottom-6 left-0 right-0 px-4 z-20">
-            <details class="max-w-md mx-auto bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
-                <summary class="list-none p-4 text-center font-bold text-indigo-600 cursor-pointer active:bg-slate-50">➕ 新增持股紀錄</summary>
-                <div class="p-4 space-y-3 border-t bg-slate-100">
-                    <input type="text" id="s-code" placeholder="股票代碼 (如 2330)" class="w-full bg-white border p-3 rounded-xl outline-none">
-                    <div class="grid grid-cols-2 gap-2">
-                        <input type="number" id="s-shares" placeholder="買入股數" class="bg-white border p-3 rounded-xl outline-none">
-                        <input type="number" id="s-cost" placeholder="買入單價" class="bg-white border p-3 rounded-xl outline-none">
+            <details class="max-w-md mx-auto bg-white rounded-[2rem] shadow-2xl border border-slate-200 overflow-hidden">
+                <summary class="list-none p-5 text-center font-black text-indigo-600 cursor-pointer active:bg-slate-50">➕ 登錄新股票</summary>
+                <div class="p-5 space-y-4 border-t bg-slate-50">
+                    <div class="grid grid-cols-2 gap-3">
+                        <div class="relative">
+                            <input type="text" id="s-code" oninput="handleCodeInput(this.value)" placeholder="代碼 (如 2330)" class="w-full bg-white border p-4 rounded-2xl outline-none focus:ring-2 focus:ring-indigo-500">
+                            <div id="name-loading" class="hidden absolute right-3 top-4">⏳</div>
+                        </div>
+                        <input type="text" id="s-name" placeholder="股票名稱 (自動抓取)" class="w-full bg-slate-100 border p-4 rounded-2xl outline-none italic">
                     </div>
-                    <button onclick="addTransaction()" class="w-full bg-indigo-600 text-white p-4 rounded-xl font-bold shadow-lg">確認存入</button>
+                    <div class="grid grid-cols-2 gap-3">
+                        <input type="number" id="s-shares" placeholder="買入股數" class="bg-white border p-4 rounded-2xl outline-none">
+                        <input type="number" id="s-cost" placeholder="買入單價" class="bg-white border p-4 rounded-2xl outline-none">
+                    </div>
+                    <button onclick="addTransaction()" class="w-full bg-slate-900 text-white p-5 rounded-2xl font-black shadow-lg active:scale-95 transition">確認存入庫存</button>
                 </div>
             </details>
         </div>
     </div>
 
-    <div id="edit-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end">
-        <div class="bg-white w-full rounded-t-3xl p-6 pb-12">
-            <div class="flex justify-between items-center mb-4">
-                <h3 id="modal-title" class="text-xl font-black">詳細紀錄</h3>
-                <button onclick="closeModal()" class="text-slate-400 text-2xl">✕</button>
+    <div id="edit-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-end">
+        <div class="bg-white w-full rounded-t-[2.5rem] p-8 pb-12">
+            <div class="flex justify-between items-center mb-6">
+                <h3 id="modal-title" class="text-2xl font-black">詳細紀錄</h3>
+                <button onclick="closeModal()" class="text-slate-300 text-3xl">✕</button>
             </div>
-            <div id="modal-content" class="space-y-3 max-h-[60vh] overflow-y-auto"></div>
+            <div id="modal-content" class="space-y-3 max-h-[50vh] overflow-y-auto no-scrollbar"></div>
         </div>
     </div>
 
     <script>
-        // --- 初始資料已清空 ---
-        let transactions = JSON.parse(localStorage.getItem('stock_tx_v3')) || [];
-        let currentPrices = JSON.parse(localStorage.getItem('stock_prices_v3')) || {};
+        let transactions = JSON.parse(localStorage.getItem('stock_tx_v4')) || [];
+        let currentPrices = JSON.parse(localStorage.getItem('stock_prices_v4')) || {};
         let oldPrices = {};
 
-        function clearAllAndReload() {
-            if(confirm('確定要清空這台手機上所有的持股紀錄嗎？')) {
+        function clearAllData() {
+            if(confirm('確定要清空所有資料嗎？')) {
                 localStorage.clear();
                 location.reload();
             }
@@ -106,16 +107,56 @@
             }
         }
 
+        // --- 核心：自動抓取股票名稱邏輯 ---
+        let debounceTimer;
+        function handleCodeInput(value) {
+            const code = value.trim();
+            if (code.length >= 4) {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => fetchStockName(code), 500);
+            }
+        }
+
+        async function fetchStockName(code) {
+            const loading = document.getElementById('name-loading');
+            const nameInput = document.getElementById('s-name');
+            loading.classList.remove('hidden');
+            
+            // 使用 Yahoo Finance Search API 進行搜尋
+            const url = `https://corsproxy.io/?https://query2.finance.yahoo.com/v1/finance/search?q=${code}`;
+            
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                // 尋找符合台灣市場的結果 (.TW 或 .TWO)
+                const result = data.quotes.find(q => q.symbol.startsWith(code) && (q.symbol.endsWith('.TW') || q.symbol.endsWith('.TWO')));
+                
+                if (result) {
+                    // 優先使用 shortName，若無則用 longName
+                    nameInput.value = result.shortname || result.longname || "未命名";
+                } else {
+                    nameInput.value = "查無此代碼";
+                }
+            } catch (e) {
+                console.error("名稱抓取失敗");
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
         const getTaxRate = (code) => code.startsWith('00') ? 0.001 : 0.003;
         const calculateFee = (amount) => Math.max(20, Math.floor(amount * 0.001425 * 0.6));
 
         function addTransaction() {
+            const name = document.getElementById('s-name').value.trim();
             const code = document.getElementById('s-code').value.trim();
             const shares = parseFloat(document.getElementById('s-shares').value);
             const cost = parseFloat(document.getElementById('s-cost').value);
-            if (code && shares && cost) {
-                transactions.push({ id: Date.now(), code, shares, cost, totalCost: (shares * cost) + calculateFee(shares * cost) });
-                localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
+            
+            if (name && code && shares && cost) {
+                transactions.push({ id: Date.now(), name, code, shares, cost, totalCost: (shares * cost) + calculateFee(shares * cost) });
+                localStorage.setItem('stock_tx_v4', JSON.stringify(transactions));
+                document.getElementById('s-name').value = '';
                 document.getElementById('s-code').value = '';
                 document.getElementById('s-shares').value = '';
                 document.getElementById('s-cost').value = '';
@@ -126,7 +167,7 @@
         }
 
         async function fetchPrice(code) {
-            const suffix = code.length === 4 ? ".TW" : (code.length === 5 ? ".TWO" : ".TW");
+            const suffix = (code.length === 5 || code.length === 6) ? ".TWO" : ".TW";
             const url = `https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${code}${suffix}`;
             try {
                 const res = await fetch(url);
@@ -134,13 +175,15 @@
                 const price = data.chart.result[0].meta.regularMarketPrice;
                 oldPrices[code] = currentPrices[code];
                 currentPrices[code] = price;
+                localStorage.setItem('stock_prices_v4', JSON.stringify(currentPrices));
                 render();
-            } catch (e) { console.error(code + " 價格獲取失敗"); }
+            } catch (e) { console.error(code + " 更新失敗"); }
         }
 
         function fetchAllPrices() {
             if (transactions.length === 0) return;
-            [...new Set(transactions.map(t => t.code))].forEach(code => fetchPrice(code));
+            const codes = [...new Set(transactions.map(t => t.code))];
+            codes.forEach(code => fetchPrice(code));
             document.getElementById('last-update').innerText = `最後更新: ${new Date().toLocaleTimeString()}`;
         }
 
@@ -149,16 +192,15 @@
             const quoContainer = document.getElementById('page-quotes');
             
             if (transactions.length === 0) {
-                invContainer.innerHTML = '<div class="text-center py-20 text-slate-300"><p class="text-4xl mb-4 text-slate-200">📭</p><p>目前沒有持股紀錄</p></div>';
+                invContainer.innerHTML = '<div class="text-center py-20 text-slate-300 font-bold">📭 尚未建立庫存</div>';
                 quoContainer.innerHTML = '';
-                document.getElementById('total-value').innerText = 'NT$ 0';
                 return;
             }
 
             invContainer.innerHTML = ''; quoContainer.innerHTML = '';
             const summary = {};
             transactions.forEach(tx => {
-                if (!summary[tx.code]) summary[tx.code] = { totalShares: 0, totalCost: 0 };
+                if (!summary[tx.code]) summary[tx.code] = { name: tx.name, totalShares: 0, totalCost: 0 };
                 summary[tx.code].totalShares += tx.shares;
                 summary[tx.code].totalCost += tx.totalCost;
             });
@@ -166,7 +208,7 @@
             let gValue = 0, gCost = 0;
             Object.keys(summary).sort().forEach(code => {
                 const s = summary[code];
-                const price = currentPrices[code] || (s.totalCost/s.totalShares);
+                const price = currentPrices[code] || 0;
                 const sellValue = (s.totalShares * price) - calculateFee(s.totalShares * price) - Math.floor(s.totalShares * price * getTaxRate(code));
                 const profit = sellValue - s.totalCost;
                 const pct = (profit / s.totalCost * 100).toFixed(2);
@@ -175,69 +217,71 @@
                 let flash = (oldPrices[code] && price > oldPrices[code]) ? "price-up" : (oldPrices[code] && price < oldPrices[code] ? "price-down" : "");
 
                 invContainer.innerHTML += `
-                    <div class="bg-white p-4 rounded-2xl border flex justify-between items-center shadow-sm">
+                    <div class="bg-white p-5 rounded-3xl border border-slate-100 flex justify-between items-center shadow-sm">
                         <div onclick="openEditModal('${code}')" class="flex-1">
-                            <p class="font-black text-lg">${code} <span class="text-[10px] text-indigo-500 font-normal">詳細 ▸</span></p>
-                            <p class="text-[10px] text-slate-400 font-bold">均價: ${(s.totalCost/s.totalShares).toFixed(2)} | 股數: ${s.totalShares.toLocaleString()}</p>
+                            <p class="font-black text-lg text-slate-900">${s.name}</p>
+                            <p class="text-[10px] text-slate-400 font-bold tracking-tighter">${code} · 股數 ${s.totalShares.toLocaleString()}</p>
                         </div>
                         <div class="text-right">
-                            <p class="text-sm font-bold ${profit >= 0 ? 'profit-pos' : 'profit-neg'}">${Math.round(profit).toLocaleString()} (${pct}%)</p>
-                            <button onclick="confirmDeleteCode('${code}')" class="text-slate-300 text-[10px] mt-1 hover:text-red-500">移除全部</button>
+                            <p class="text-sm font-black ${profit >= 0 ? 'profit-pos' : 'profit-neg'}">${Math.round(profit).toLocaleString()}</p>
+                            <p class="text-[10px] font-bold ${profit >= 0 ? 'profit-pos' : 'profit-neg'}">${pct}%</p>
                         </div>
+                        <button onclick="confirmDeleteCode('${code}')" class="ml-4 text-slate-200">✕</button>
                     </div>`;
 
                 quoContainer.innerHTML += `
-                    <div class="bg-white p-5 rounded-2xl border flex justify-between items-center ${flash} shadow-sm">
-                        <p class="text-xl font-black">${code}</p>
+                    <div class="bg-white p-6 rounded-3xl border border-slate-100 flex justify-between items-center shadow-sm ${flash}">
+                        <div>
+                            <p class="text-xl font-black text-slate-900">${s.name}</p>
+                            <p class="text-[10px] text-slate-300 font-mono tracking-widest">${code}</p>
+                        </div>
                         <div class="text-right">
-                            <p class="text-2xl font-mono font-black">${price.toFixed(2)}</p>
-                            <p class="text-[10px] font-bold ${profit >= 0 ? 'profit-pos' : 'profit-neg'}">預估損益: NT$ ${Math.round(profit).toLocaleString()}</p>
+                            <p class="text-2xl font-mono font-black tracking-tighter">${price.toFixed(2)}</p>
+                            <p class="text-[10px] font-bold ${profit >= 0 ? 'profit-pos' : 'profit-neg'}">預估損益: ${Math.round(profit).toLocaleString()}</p>
                         </div>
                     </div>`;
             });
 
             document.getElementById('total-value').innerText = `NT$ ${Math.round(gValue).toLocaleString()}`;
             const totalProfit = gValue - gCost;
-            const pEl = document.getElementById('total-profit');
-            pEl.innerText = `${totalProfit >= 0 ? '+' : ''}${Math.round(totalProfit).toLocaleString()}`;
+            document.getElementById('total-profit').innerText = `${totalProfit >= 0 ? '獲利 ' : '虧損 '}${Math.round(totalProfit).toLocaleString()}`;
             document.getElementById('total-percent').innerText = `${gCost === 0 ? 0 : (totalProfit / gCost * 100).toFixed(2)}%`;
         }
 
         function openEditModal(code) {
             const modal = document.getElementById('edit-modal');
             const content = document.getElementById('modal-content');
-            document.getElementById('modal-title').innerText = `${code} 交易明細`;
+            const s = transactions.find(t => t.code === code);
+            document.getElementById('modal-title').innerText = `${s.name} (${code})`;
             const records = transactions.filter(t => t.code === code);
             content.innerHTML = records.map(r => `
-                <div class="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <div class="flex justify-between items-center bg-slate-50 p-5 rounded-2xl border border-slate-100">
                     <div>
-                        <p class="text-sm font-bold text-slate-700">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
-                        <p class="text-[9px] text-slate-400">登錄時間: ${new Date(r.id).toLocaleTimeString()}</p>
+                        <p class="font-black text-slate-700">${r.shares.toLocaleString()} 股</p>
+                        <p class="text-xs text-slate-400 font-mono">買入價格: ${r.cost}</p>
                     </div>
-                    <button onclick="deleteTransaction(${r.id})" class="text-red-500 text-xs font-bold">刪除</button>
+                    <button onclick="deleteTransaction(${r.id})" class="text-red-500 font-bold text-sm">刪除</button>
                 </div>`).join('');
             modal.classList.remove('hidden');
         }
 
         function deleteTransaction(id) {
             transactions = transactions.filter(t => t.id !== id);
-            localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
-            render();
-            if(!transactions.some(t => t.code === document.getElementById('modal-title').innerText.split(' ')[0])) closeModal();
-            else openEditModal(document.getElementById('modal-title').innerText.split(' ')[0]);
+            localStorage.setItem('stock_tx_v4', JSON.stringify(transactions));
+            render(); closeModal();
         }
 
         function confirmDeleteCode(code) {
-            if(confirm(`確定要移除代碼 ${code} 的所有紀錄嗎？`)) {
+            if(confirm('確定要移除這檔股票的所有持股嗎？')) {
                 transactions = transactions.filter(t => t.code !== code);
-                localStorage.setItem('stock_tx_v3', JSON.stringify(transactions));
+                localStorage.setItem('stock_tx_v4', JSON.stringify(transactions));
                 render();
             }
         }
 
         function closeModal() { document.getElementById('edit-modal').classList.add('hidden'); }
 
-        setInterval(fetchAllPrices, 20000);
+        setInterval(fetchAllPrices, 15000);
         render();
         fetchAllPrices();
     </script>
