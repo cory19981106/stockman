@@ -6,6 +6,7 @@
     <title>台股精算 Pro - AI 終端版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
     
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap');
@@ -21,9 +22,7 @@
         summary::-webkit-details-marker { display: none; }
         summary { list-style: none; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        
-        /* 讓 K線圖容器有固定比例 */
-        #tv-chart-container { width: 100%; height: 280px; border-radius: 1rem; overflow: hidden; background: #f1f5f9; }
+        #tv-chart-container { width: 100%; height: 320px; border-radius: 1.5rem; overflow: hidden; background: #f1f5f9; position: relative; }
     </style>
 
     <script type="module">
@@ -45,6 +44,7 @@
         const db = getFirestore(app);
 
         let currentUser = null, stocks = [], watchlist = [], currentPrices = {}, chartInstance = null;
+        let editingId = null; // 追蹤編輯狀態
 
         onAuthStateChanged(auth, async (user) => {
             if (user) {
@@ -115,7 +115,7 @@
             let gV = 0, gP = 0, gPaid = 0;
             Object.keys(sum).sort().forEach(code => {
                 const s = sum[code];
-                const profit = (s.shares * s.info.price) - s.cost; // 簡化版損益，細節計算維持原樣
+                const profit = (s.shares * s.info.price) - s.cost;
                 const isUp = s.info.price >= s.info.prev;
                 gV += (s.shares * s.info.price); gPaid += s.cost; gP += profit;
 
@@ -167,7 +167,6 @@
             updateChart(sum);
         }
 
-        // TradingView Ticker 轉換器 (Yahoo .TW -> TWSE:, Yahoo .TWO -> OTC:)
         function getTVTicker(code) {
             const info = currentPrices[code];
             if (!info) return `TWSE:${code}`;
@@ -179,29 +178,25 @@
             const name = watchlist.find(w => w.code === code)?.name || stocks.find(s => s.code === code)?.name || code;
             document.getElementById('modal-title').innerText = `${name} (${code})`;
             
-            // 載入 TradingView K線
+            // 載入 TradingView 進階圖表
             const container = document.getElementById('tv-chart-container');
-            container.innerHTML = ''; // 清空舊圖
-            const script = document.createElement('script');
-            script.src = "https://s3.tradingview.com/external-embedding/embed-widget-mini-symbol-overview.js";
-            script.async = true;
-            script.innerHTML = JSON.stringify({
-                "symbol": getTVTicker(code),
-                "width": "100%",
-                "height": "100%",
-                "locale": "zh_TW",
-                "dateRange": "1M",
-                "colorTheme": "light",
-                "trendLineColor": "rgba(41, 98, 255, 1)",
-                "underLineColor": "rgba(41, 98, 255, 0.3)",
-                "underLineBottomColor": "rgba(41, 98, 255, 0)",
-                "isReadOnly": false,
+            container.innerHTML = `<div id="tv-advanced-widget" style="height:100%; width:100%;"></div>`;
+            new TradingView.widget({
                 "autosize": true,
-                "largeChartUrl": ""
+                "symbol": getTVTicker(code),
+                "interval": "D",
+                "timezone": "Etc/UTC",
+                "theme": "light",
+                "style": "1",
+                "locale": "zh_TW",
+                "toolbar_bg": "#f1f3f6",
+                "enable_publishing": false,
+                "hide_top_toolbar": true,
+                "hide_legend": true,
+                "save_image": false,
+                "container_id": "tv-advanced-widget"
             });
-            container.appendChild(script);
 
-            // 外部連結與功能按鈕
             document.getElementById('modal-actions').innerHTML = `
                 <div class="grid grid-cols-2 gap-3 mb-6">
                     <a href="https://tw.stock.yahoo.com/quote/${code}" target="_blank" class="bg-slate-100 text-slate-700 p-3 rounded-2xl text-center text-xs font-black">Yahoo 財經</a>
@@ -215,12 +210,48 @@
                     ${stocks.filter(s => s.code === code).map(r => `
                         <div class="flex justify-between items-center p-4 bg-slate-50 rounded-2xl">
                             <p class="text-xs font-bold text-slate-600">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
-                            <button onclick="deleteTx(${r.id})" class="text-[10px] bg-red-100 text-red-500 px-3 py-1.5 rounded-full font-black">刪除</button>
+                            <div class="flex gap-2">
+                                <button onclick="editTx(${r.id})" class="text-[10px] bg-indigo-100 text-indigo-500 px-3 py-1.5 rounded-full font-black">修改</button>
+                                <button onclick="deleteTx(${r.id})" class="text-[10px] bg-red-100 text-red-500 px-3 py-1.5 rounded-full font-black">刪除</button>
+                            </div>
                         </div>
                     `).join('')}
                 </div>
             `;
             document.getElementById('modal').classList.remove('hidden');
+        };
+
+        window.editTx = (id) => {
+            const tx = stocks.find(s => s.id === id);
+            if (!tx) return;
+            closeModal();
+            switchTab('inv');
+            document.getElementById('add-details').open = true;
+            document.getElementById('s-code').value = tx.code;
+            document.getElementById('s-name').value = tx.name;
+            document.getElementById('s-shares').value = tx.shares;
+            document.getElementById('s-cost').value = tx.cost;
+            editingId = id;
+            const saveBtn = document.getElementById('save-btn');
+            saveBtn.innerText = "更新持股紀錄";
+            saveBtn.classList.replace('bg-indigo-600', 'bg-orange-500');
+        };
+
+        window.saveTransaction = async () => {
+            const code = document.getElementById('s-code').value.trim(), name = document.getElementById('s-name').value.trim(), shares = parseFloat(document.getElementById('s-shares').value), cost = parseFloat(document.getElementById('s-cost').value);
+            if(code && shares && cost) {
+                if (editingId) {
+                    const idx = stocks.findIndex(s => s.id === editingId);
+                    stocks[idx] = { ...stocks[idx], code, name: name || code, shares, cost };
+                    editingId = null;
+                    const saveBtn = document.getElementById('save-btn');
+                    saveBtn.innerText = "存入雲端資產";
+                    saveBtn.classList.replace('bg-orange-500', 'bg-indigo-600');
+                } else {
+                    stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
+                }
+                await saveUserData(); resetForm(); fetchAllData();
+            }
         };
 
         window.copyAICmd = (code, name) => {
@@ -249,11 +280,6 @@
             listContainer.innerHTML = entries.map((e, i) => `<div class="flex justify-between items-center p-2"><div class="flex items-center gap-3 overflow-hidden"><div class="w-2 h-2 rounded-full" style="background-color: ${colors[i % colors.length]}"></div><span class="text-sm font-bold text-slate-700 truncate">${e.name}</span></div><div class="text-right"><p class="text-sm font-mono font-extrabold text-slate-700">NT$ ${Math.round(e.value).toLocaleString()}</p></div></div>`).join('');
         }
 
-        window.saveTransaction = async () => {
-            const code = document.getElementById('s-code').value.trim(), name = document.getElementById('s-name').value.trim(), shares = parseFloat(document.getElementById('s-shares').value), cost = parseFloat(document.getElementById('s-cost').value);
-            if(code && shares && cost) { stocks.push({ id: Date.now(), code, name: name || code, shares, cost }); await saveUserData(); resetForm(); fetchAllData(); }
-        };
-
         window.deleteTx = async (id) => { if(confirm('刪除交易？')) { stocks = stocks.filter(s => s.id !== id); await saveUserData(); render(); closeModal(); } };
 
         window.switchTab = (tab) => {
@@ -268,14 +294,21 @@
         
         window.closeModal = () => document.getElementById('modal').classList.add('hidden');
         window.logout = () => signOut(auth);
-        window.resetForm = () => { document.getElementById('s-code').value=''; document.getElementById('s-name').value=''; document.getElementById('s-shares').value=''; document.getElementById('s-cost').value=''; document.getElementById('add-details').open = false; };
+        window.resetForm = () => { 
+            document.getElementById('s-code').value=''; document.getElementById('s-name').value=''; document.getElementById('s-shares').value=''; document.getElementById('s-cost').value=''; 
+            document.getElementById('add-details').open = false; 
+            editingId = null;
+            const saveBtn = document.getElementById('save-btn');
+            saveBtn.innerText = "存入雲端資產";
+            saveBtn.classList.replace('bg-orange-500', 'bg-indigo-600');
+        };
         window.authAction = async () => {
             const email = document.getElementById('email').value, pass = document.getElementById('pass').value;
             try { await signInWithEmailAndPassword(auth, email, pass); } catch (e) { alert("登入失敗"); }
         };
     </script>
 </head>
-<body class="pb-32">
+<body class="pb-32 bg-slate-50">
 
     <div id="auth-page" class="flex flex-col items-center justify-center min-h-screen p-8 bg-slate-900">
         <div class="w-full max-w-sm text-center">
@@ -332,7 +365,7 @@
 
         <div id="floating-add-area" class="fixed bottom-8 left-0 right-0 px-6 z-40">
             <details id="add-details" class="bg-white rounded-[2.5rem] shadow-2xl border border-slate-200 overflow-hidden">
-                <summary class="p-5 text-center font-extrabold text-indigo-600 cursor-pointer active:bg-slate-50">＋ 新增庫存紀錄</summary>
+                <summary class="p-5 text-center font-extrabold text-indigo-600 cursor-pointer active:bg-slate-50">＋ 新增/修改庫存紀錄</summary>
                 <div class="p-8 space-y-5 bg-white border-t border-slate-50">
                     <div class="grid grid-cols-2 gap-4">
                         <input type="text" id="s-code" oninput="handleCodeInput(this.value, 's-name')" placeholder="股票代碼" class="p-4 bg-slate-50 rounded-2xl outline-none text-sm border-none">
@@ -344,7 +377,7 @@
                     </div>
                     <div class="flex gap-3">
                         <button onclick="resetForm()" class="flex-1 bg-slate-100 text-slate-500 p-4 rounded-2xl font-extrabold text-sm active:scale-95 transition-all">取消</button>
-                        <button onclick="saveTransaction()" class="flex-[2] bg-indigo-600 text-white p-4 rounded-2xl font-extrabold text-sm active:scale-95 transition-all shadow-lg shadow-indigo-500/20">存入雲端資產</button>
+                        <button id="save-btn" onclick="saveTransaction()" class="flex-[2] bg-indigo-600 text-white p-4 rounded-2xl font-extrabold text-sm active:scale-95 transition-all shadow-lg shadow-indigo-500/20">存入雲端資產</button>
                     </div>
                 </div>
             </details>
