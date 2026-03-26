@@ -3,27 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>台股精算 Pro</title>
+    <title>台股雲端精算 - 跨平台版</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    
     <style>
-        :root { --up-color: #ef4444; --down-color: #22c55e; }
-        body { background-color: #f8fafc; transition: background-color 0.3s; }
-        .dark-mode { background-color: #0f172a; color: #f8fafc; }
-        .dark-mode .bg-white { background-color: #1e293b; color: #f8fafc; border-color: #334155; }
-        .up { color: var(--up-color); font-weight: 900; }
-        .down { color: var(--down-color); font-weight: 900; }
+        .up-red { color: #ef4444; font-weight: 900; }
+        .down-green { color: #22c55e; font-weight: 900; }
         @keyframes flash-up { from { background-color: rgba(239, 68, 68, 0.2); } to { background-color: transparent; } }
         @keyframes flash-down { from { background-color: rgba(34, 197, 94, 0.2); } to { background-color: transparent; } }
         .price-up { animation: flash-up 1.2s ease-out; }
         .price-down { animation: flash-down 1.2s ease-out; }
         .live-dot { width: 8px; height: 8px; background-color: #ef4444; border-radius: 50%; display: inline-block; animation: blink 1s infinite; margin-right: 6px; }
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
-        .tab-active { color: #6366f1; border-bottom: 3px solid #6366f1; }
-        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .tab-active { color: #4f46e5; border-bottom: 4px solid #4f46e5; }
+        /* 電腦版陰影增強 */
+        @media (min-width: 768px) {
+            .stock-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; }
+        }
+        @media (min-width: 1280px) {
+            .stock-grid { grid-template-columns: repeat(3, 1fr); }
+        }
     </style>
 
     <script type="module">
@@ -31,6 +31,7 @@
         import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
+        // 使用你的 Firebase 金鑰
         const firebaseConfig = {
             apiKey: "AIzaSyDsT-DHIht7TASNmb7GrUzJdAVxIlNNIMw",
             authDomain: "stock-d7721.firebaseapp.com",
@@ -48,259 +49,284 @@
         let stocks = [];
         let currentPrices = {};
         let oldPrices = {};
-        let taiex = { price: 0, pct: 0 };
-        let adr = { price: 0, pct: 0 };
-        let myChart = null;
+        let nightInfo = { tx: { price: 0, pct: 0 }, tsm: { price: 0, pct: 0 } };
+        let editingId = null;
 
-        // --- 核心功能 ---
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 currentUser = user;
                 document.getElementById('auth-page').classList.add('hidden');
                 document.getElementById('main-page').classList.remove('hidden');
-                await syncFromCloud();
-                refreshAll();
+                await loadStocks();
+                startSync();
             } else {
                 document.getElementById('auth-page').classList.remove('hidden');
                 document.getElementById('main-page').classList.add('hidden');
             }
         });
 
+        async function loadStocks() {
+            const docSnap = await getDoc(doc(db, "users", currentUser.uid));
+            if (docSnap.exists()) stocks = docSnap.data().stocks || [];
+            render();
+        }
+
+        window.saveTransaction = async () => {
+            const code = document.getElementById('s-code').value.trim();
+            const name = document.getElementById('s-name').value.trim();
+            const shares = parseFloat(document.getElementById('s-shares').value);
+            const cost = parseFloat(document.getElementById('s-cost').value);
+            if(code && shares && cost) {
+                if (editingId) {
+                    const index = stocks.findIndex(s => s.id === editingId);
+                    if (index !== -1) stocks[index] = { ...stocks[index], code, name: name || code, shares, cost };
+                    editingId = null;
+                } else {
+                    stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
+                }
+                await setDoc(doc(db, "users", currentUser.uid), { stocks });
+                resetForm();
+                fetchAllData();
+            }
+        };
+
+        window.handleCodeInput = async (code) => {
+            if(code.length < 4) return;
+            const res = await fetch(`https://corsproxy.io/?https://query2.finance.yahoo.com/v1/finance/search?q=${code}`);
+            const data = await res.json();
+            const found = data.quotes.find(q => q.symbol.includes(code) && (q.symbol.includes('.TW') || q.symbol.includes('.TWO')));
+            if(found) document.getElementById('s-name').value = found.shortname || found.longname;
+        };
+
+        async function fetchPrice(code) {
+            const suffix = (code.length >= 5) ? ".TWO" : ".TW";
+            try {
+                const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${code}${suffix}`);
+                const data = await res.json();
+                const meta = data.chart.result[0].meta;
+                const price = meta.regularMarketPrice;
+                oldPrices[code] = currentPrices[code]?.price || price;
+                currentPrices[code] = { price, prev: meta.previousClose, pct: ((price - meta.previousClose) / meta.previousClose * 100).toFixed(2) };
+                render();
+            } catch (e) {}
+        }
+
+        async function fetchNightData() {
+            try {
+                const [txRes, adrRes] = await Promise.all([
+                    fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/TXF=F`),
+                    fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/TSM`)
+                ]);
+                const txMeta = (await txRes.json()).chart.result[0].meta;
+                const adrMeta = (await adrRes.json()).chart.result[0].meta;
+                nightInfo.tx = { price: txMeta.regularMarketPrice, pct: ((txMeta.regularMarketPrice - txMeta.previousClose) / txMeta.previousClose * 100).toFixed(2) };
+                nightInfo.tsm = { price: adrMeta.regularMarketPrice, pct: ((adrMeta.regularMarketPrice - adrMeta.previousClose) / adrMeta.previousClose * 100).toFixed(2) };
+                render();
+            } catch (e) {}
+        }
+
+        window.fetchAllData = () => {
+            [...new Set(stocks.map(s => s.code))].forEach(fetchPrice);
+            fetchNightData();
+            document.getElementById('update-time').innerText = `Sync: ${new Date().toLocaleTimeString()}`;
+        };
+
+        function startSync() { fetchAllData(); setInterval(fetchAllData, 15000); }
+
+        function render() {
+            const inv = document.getElementById('p-inv');
+            const quo = document.getElementById('p-quo');
+            const night = document.getElementById('p-night-content');
+            inv.innerHTML = ''; quo.innerHTML = '';
+
+            const summary = {};
+            stocks.forEach(s => {
+                const info = currentPrices[s.code] || { price: 0, pct: 0, prev: 0 };
+                if(!summary[s.code]) summary[s.code] = { name: s.name, shares: 0, cost: 0, info };
+                summary[s.code].shares += s.shares;
+                summary[s.code].cost += (s.shares * s.cost);
+            });
+
+            Object.keys(summary).sort().forEach(code => {
+                const s = summary[code];
+                const profit = (s.shares * s.info.price) - s.cost;
+                const isUp = s.info.price >= s.info.prev;
+                const flash = (oldPrices[code] < s.info.price) ? "price-up" : (oldPrices[code] > s.info.price ? "price-down" : "");
+
+                inv.innerHTML += `
+                    <div class="bg-white p-6 rounded-3xl border border-slate-100 flex justify-between items-center shadow-sm hover:shadow-md transition cursor-pointer" onclick="openModal('${code}')">
+                        <div>
+                            <p class="font-black text-xl text-slate-900">${s.name}</p>
+                            <p class="text-xs text-slate-400 font-bold uppercase">${code} · ${s.shares.toLocaleString()} 股</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg ${profit >= 0 ? 'up-red' : 'down-green'}">${Math.round(profit).toLocaleString()}</p>
+                            <p class="text-[10px] text-slate-300">成本: ${Math.round(s.cost/s.shares).toLocaleString()}</p>
+                        </div>
+                    </div>`;
+
+                quo.innerHTML += `
+                    <div class="bg-white p-8 rounded-[2rem] border border-slate-100 flex justify-between items-center shadow-sm ${flash}">
+                        <div><p class="text-2xl font-black text-slate-900">${s.name}</p><p class="text-xs text-slate-300 font-mono">${code}</p></div>
+                        <div class="text-right">
+                            <p class="text-3xl font-mono font-black ${isUp ? 'up-red' : 'down-green'}">${s.info.price.toFixed(2)}</p>
+                            <p class="text-sm font-bold ${isUp ? 'up-red' : 'down-green'}">${isUp ? '▲' : '▼'} ${s.info.pct}%</p>
+                        </div>
+                    </div>`;
+            });
+
+            night.innerHTML = `
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-slate-800 p-8 rounded-3xl text-center">
+                        <p class="text-indigo-400 text-xs font-bold uppercase mb-2">台指期夜盤</p>
+                        <h3 class="text-4xl font-black font-mono ${nightInfo.tx.pct >= 0 ? 'up-red' : 'down-green'}">${nightInfo.tx.price}</h3>
+                        <p class="text-sm ${nightInfo.tx.pct >= 0 ? 'up-red' : 'down-green'}">${nightInfo.tx.pct}%</p>
+                    </div>
+                    <div class="bg-slate-800 p-8 rounded-3xl text-center">
+                        <p class="text-indigo-400 text-xs font-bold uppercase mb-2">台積電 ADR (TSM)</p>
+                        <h3 class="text-4xl font-black font-mono ${nightInfo.tsm.pct >= 0 ? 'up-red' : 'down-green'}">${nightInfo.tsm.price}</h3>
+                        <p class="text-sm ${nightInfo.tsm.pct >= 0 ? 'up-red' : 'down-green'}">${nightInfo.tsm.pct}%</p>
+                    </div>
+                </div>`;
+            
+            document.getElementById('total-v').innerText = `NT$ ${Math.round(Object.values(summary).reduce((a, b) => a + (b.shares * b.info.price), 0)).toLocaleString()}`;
+        }
+
+        window.openModal = (code) => {
+            const m = document.getElementById('modal');
+            const c = document.getElementById('modal-content');
+            const list = stocks.filter(s => s.code === code);
+            document.getElementById('modal-title').innerText = `${list[0].name} 明細`;
+            c.innerHTML = list.map(r => `
+                <div class="flex justify-between items-center p-5 bg-slate-50 rounded-2xl mb-3 border">
+                    <p class="font-bold text-base">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
+                    <div class="flex gap-2">
+                        <button onclick="fillEditForm(${r.id})" class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold">編輯</button>
+                        <button onclick="deleteTx(${r.id})" class="bg-red-500 text-white px-4 py-2 rounded-xl text-xs font-bold">刪除</button>
+                    </div>
+                </div>`).join('');
+            m.classList.remove('hidden');
+        };
+
+        window.fillEditForm = (id) => {
+            const s = stocks.find(item => item.id === id);
+            editingId = id;
+            document.getElementById('s-code').value = s.code;
+            document.getElementById('s-name').value = s.name;
+            document.getElementById('s-shares').value = s.shares;
+            document.getElementById('s-cost').value = s.cost;
+            document.getElementById('submit-btn').innerText = "更新紀錄";
+            document.querySelector('details').open = true;
+            document.getElementById('modal').classList.add('hidden');
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        };
+
+        window.deleteTx = async (id) => {
+            if(confirm('確認刪除此筆紀錄？')) { 
+                stocks = stocks.filter(s => s.id !== id); 
+                await setDoc(doc(db, "users", currentUser.uid), { stocks }); 
+                render(); 
+                document.getElementById('modal').classList.add('hidden'); 
+            }
+        };
+
+        window.closeModal = () => document.getElementById('modal').classList.add('hidden');
+        window.switchTab = (tab) => {
+            ['p-inv', 'p-quo', 'p-night'].forEach(p => document.getElementById(p).classList.add('hidden'));
+            document.getElementById(`p-${tab}`).classList.remove('hidden');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active'));
+            event.target.classList.add('tab-active');
+        };
         window.authAction = async (type) => {
             const email = document.getElementById('email').value;
             const pass = document.getElementById('pass').value;
             try {
                 if(type === 'reg') await createUserWithEmailAndPassword(auth, email, pass);
                 else await signInWithEmailAndPassword(auth, email, pass);
-            } catch (e) { alert("驗證失敗: " + e.message); }
+            } catch (e) { alert(e.message); }
         };
-
-        async function syncFromCloud() {
-            const docSnap = await getDoc(doc(db, "users", currentUser.uid));
-            if (docSnap.exists()) stocks = docSnap.data().stocks || [];
-            render();
-        }
-
-        window.addStock = async () => {
-            const code = document.getElementById('s-code').value.trim();
-            const name = document.getElementById('s-name').value.trim();
-            const shares = parseFloat(document.getElementById('s-shares').value);
-            const cost = parseFloat(document.getElementById('s-cost').value);
-            if(code && shares && cost) {
-                stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
-                await setDoc(doc(db, "users", currentUser.uid), { stocks });
-                document.querySelector('details').open = false;
-                refreshAll();
-            }
-        };
-
-        window.deleteCode = async (code) => {
-            if(confirm('確定刪除？')) {
-                stocks = stocks.filter(s => s.code !== code);
-                await setDoc(doc(db, "users", currentUser.uid), { stocks });
-                render();
-            }
-        };
-
-        // --- 數據抓取 ---
-        async function fetchData(symbol, type) {
-            try {
-                const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`);
-                const data = await res.json();
-                const meta = data.chart.result[0].meta;
-                const price = meta.regularMarketPrice;
-                const pct = ((price - meta.previousClose) / meta.previousClose * 100).toFixed(2);
-                
-                if (type === 'stock') {
-                    oldPrices[symbol] = currentPrices[symbol]?.price || 0;
-                    currentPrices[symbol] = { price, prev: meta.previousClose, pct };
-                } else if (type === 'taiex') {
-                    taiex = { price, pct };
-                } else if (type === 'adr') {
-                    adr = { price, pct };
-                }
-                render();
-            } catch (e) {}
-        }
-
-        window.refreshAll = () => {
-            [...new Set(stocks.map(s => s.code))].forEach(c => fetchData(c + (c.length>=5?".TWO":".TW"), 'stock'));
-            fetchData('^TWII', 'taiex');  // 大盤
-            fetchData('TSM', 'adr');      // 台積電 ADR
-            fetchData('TXF=F', 'night');  // 夜盤
-            document.getElementById('last-up').innerText = `Sync: ${new Date().toLocaleTimeString()}`;
-            if ('vibrate' in navigator) navigator.vibrate(10); // 微震動
-        };
-
-        // --- 渲染介面 ---
-        function render() {
-            const inv = document.getElementById('p-inv');
-            const quo = document.getElementById('p-quo');
-            inv.innerHTML = ''; quo.innerHTML = '';
-            
-            let totalVal = 0, totalCost = 0;
-            const summary = {};
-            const chartData = { labels: [], values: [] };
-
-            stocks.forEach(s => {
-                const codeFull = s.code + (s.code.length>=5?".TWO":".TW");
-                const info = currentPrices[codeFull] || { price: 0, prev: 0, pct: 0 };
-                if(!summary[s.code]) summary[s.code] = { name: s.name, shares: 0, cost: 0, price: info.price, pct: info.pct };
-                summary[s.code].shares += s.shares;
-                summary[s.code].cost += (s.shares * s.cost);
-                totalVal += (s.shares * info.price);
-                totalCost += (s.shares * s.cost);
-            });
-
-            Object.keys(summary).forEach(code => {
-                const s = summary[code];
-                const profit = (s.shares * s.price) - s.cost;
-                const profitPct = (s.cost === 0) ? 0 : (profit / s.cost * 100).toFixed(2);
-                const color = s.price >= s.cost ? 'up' : 'down';
-                
-                chartData.labels.push(s.name);
-                chartData.values.push(Math.round(s.shares * s.price));
-
-                inv.innerHTML += `
-                    <div class="bg-white p-5 rounded-3xl border mb-3 flex justify-between items-center shadow-sm">
-                        <div><p class="font-black">${s.name}</p><p class="text-[10px] text-slate-400">${code} · ${s.shares} 股</p></div>
-                        <div class="text-right">
-                            <p class="${color}">${Math.round(profit).toLocaleString()}</p>
-                            <p class="text-[10px] text-slate-400">均價: ${Math.round(s.cost/s.shares)}</p>
-                        </div>
-                        <button onclick="deleteCode('${code}')" class="ml-4 text-slate-200">✕</button>
-                    </div>`;
-
-                quo.innerHTML += `
-                    <div class="bg-white p-5 rounded-3xl border mb-3 flex justify-between items-center shadow-sm">
-                        <p class="text-lg font-black">${s.name}</p>
-                        <div class="text-right">
-                            <p class="text-xl font-mono font-black ${s.pct >= 0 ? 'up' : 'down'}">${s.price || '--'}</p>
-                            <p class="text-[10px] ${s.pct >= 0 ? 'up' : 'down'}">${s.pct}%</p>
-                        </div>
-                    </div>`;
-            });
-
-            // 更新大盤資訊
-            document.getElementById('idx-price').innerText = Math.round(taiex.price);
-            document.getElementById('idx-pct').innerText = `${taiex.pct}%`;
-            document.getElementById('idx-pct').className = taiex.pct >= 0 ? 'up' : 'down';
-            document.getElementById('total-v').innerText = `NT$ ${Math.round(totalVal).toLocaleString()}`;
-            
-            updateChart(chartData);
-        }
-
-        function updateChart(data) {
-            const ctx = document.getElementById('assetChart');
-            if(myChart) myChart.destroy();
-            myChart = new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: data.labels,
-                    datasets: [{ data: data.values, backgroundColor: ['#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4'], borderWeight: 0 }]
-                },
-                options: { plugins: { legend: { display: false } }, cutout: '70%' }
-            });
-        }
-
-        window.switchTab = (tab) => {
-            ['p-inv', 'p-quo', 'p-ana', 'p-night'].forEach(p => document.getElementById(p).classList.add('hidden'));
-            document.getElementById(`p-${tab}`).classList.remove('hidden');
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active'));
-            event.target.classList.add('tab-active');
-        };
-
-        window.toggleDark = () => document.body.classList.toggle('dark-mode');
-
-        setInterval(refreshAll, 30000);
         window.logout = () => signOut(auth);
+        window.resetForm = () => { editingId = null; document.getElementById('s-code').value = ''; document.getElementById('s-name').value = ''; document.getElementById('s-shares').value = ''; document.getElementById('s-cost').value = ''; document.getElementById('submit-btn').innerText = "確認存入雲端"; document.querySelector('details').open = false; };
     </script>
 </head>
-<body class="antialiased pb-40">
+<body class="bg-slate-50 text-slate-900 pb-40 min-h-screen">
 
-    <div id="auth-page" class="max-w-md mx-auto h-screen flex flex-col justify-center p-8 bg-slate-900">
-        <h1 class="text-4xl font-black text-indigo-500 mb-2 text-center">台股精算 Pro</h1>
-        <p class="text-slate-500 text-center mb-10">Professional Cloud Stock Tracker</p>
-        <div class="space-y-4">
-            <input type="email" id="email" placeholder="Email" class="w-full p-4 bg-slate-800 text-white rounded-2xl outline-none">
-            <input type="password" id="pass" placeholder="Password" class="w-full p-4 bg-slate-800 text-white rounded-2xl outline-none">
-            <button onclick="authAction('login')" class="w-full bg-indigo-600 text-white p-4 rounded-2xl font-black shadow-lg">登入 App</button>
-            <button onclick="authAction('reg')" class="w-full text-slate-400 p-2 text-sm">註冊新帳號</button>
+    <div id="auth-page" class="flex flex-col items-center justify-center min-h-screen p-6 bg-slate-900">
+        <div class="w-full max-w-md bg-slate-800 p-10 rounded-[3rem] shadow-2xl text-center">
+            <h1 class="text-4xl font-black text-indigo-500 mb-2">台股精算 Pro</h1>
+            <p class="text-slate-500 mb-8">Cloud Based Trading Dashboard</p>
+            <div class="space-y-4">
+                <input type="email" id="email" placeholder="Email" class="w-full p-4 bg-slate-700 text-white rounded-2xl outline-none">
+                <input type="password" id="pass" placeholder="Password" class="w-full p-4 bg-slate-700 text-white rounded-2xl outline-none">
+                <button onclick="authAction('login')" class="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black text-lg">登入系統</button>
+                <button onclick="authAction('reg')" class="w-full text-slate-500 text-sm">還沒有帳號？點此註冊</button>
+            </div>
         </div>
     </div>
 
-    <div id="main-page" class="hidden max-w-md mx-auto">
-        <div class="p-4 flex justify-between items-center sticky top-0 bg-inherit z-20">
-            <div class="flex items-center gap-3">
+    <div id="main-page" class="hidden max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="py-6 flex justify-between items-center border-b">
+            <div class="flex items-center">
                 <span class="live-dot"></span>
-                <div class="text-xs">
-                    <span class="text-slate-400 font-bold">加權指數</span>
-                    <span id="idx-price" class="font-mono font-bold ml-1">---</span>
-                    <span id="idx-pct" class="ml-1">0%</span>
-                </div>
+                <span class="text-sm font-bold text-slate-400">實時連線模式</span>
             </div>
-            <div class="flex gap-3">
-                <button onclick="toggleDark()" class="text-lg">🌓</button>
-                <button onclick="logout()" class="text-xs text-slate-400">登出</button>
+            <div class="flex items-center gap-4">
+                <span id="update-time" class="hidden sm:block text-[10px] text-slate-300 font-mono"></span>
+                <button onclick="logout()" class="bg-white border px-4 py-2 rounded-xl text-xs font-bold text-slate-400 hover:bg-slate-100 transition">登出</button>
             </div>
         </div>
 
-        <div class="flex border-b bg-white sticky top-[52px] z-10 shadow-sm overflow-x-auto no-scrollbar">
-            <button onclick="switchTab('inv')" class="tab-btn flex-1 py-4 font-black tab-active whitespace-nowrap px-4">資產</button>
-            <button onclick="switchTab('quo')" class="tab-btn flex-1 py-4 font-black text-slate-400 whitespace-nowrap px-4">行情</button>
-            <button onclick="switchTab('ana')" class="tab-btn flex-1 py-4 font-black text-slate-400 whitespace-nowrap px-4">分佈</button>
-            <button onclick="switchTab('night')" class="tab-btn flex-1 py-4 font-black text-slate-400 whitespace-nowrap px-4">夜盤</button>
+        <div class="flex border-b bg-white sticky top-0 z-10 shadow-sm mb-6 rounded-b-2xl overflow-hidden">
+            <button onclick="switchTab('inv')" class="tab-btn flex-1 py-5 font-black tab-active text-lg">資產損益</button>
+            <button onclick="switchTab('quo')" class="tab-btn flex-1 py-5 font-black text-slate-400 text-lg">即時行情</button>
+            <button onclick="switchTab('night')" class="tab-btn flex-1 py-5 font-black text-slate-400 text-lg">夜盤/ADR</button>
         </div>
 
-        <div class="p-4">
-            <div class="bg-indigo-600 p-8 rounded-[2.5rem] shadow-xl text-white mb-6">
-                <p id="last-up" class="text-[9px] text-indigo-300 font-mono mb-2 uppercase tracking-tighter"></p>
-                <p class="text-indigo-200 text-xs font-bold mb-1 uppercase">Portfolio Value</p>
-                <h2 id="total-v" class="text-3xl font-black font-mono tracking-tighter">NT$ 0</h2>
-            </div>
-
-            <div id="p-inv" class="space-y-1"></div>
-            <div id="p-quo" class="hidden"></div>
-            
-            <div id="p-ana" class="hidden">
-                <div class="bg-white p-8 rounded-[2.5rem] shadow-sm text-center">
-                    <h3 class="font-bold mb-6 text-slate-400 uppercase text-xs">持股權重分佈</h3>
-                    <canvas id="assetChart"></canvas>
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div class="lg:col-span-4">
+                <div class="bg-indigo-600 p-10 rounded-[3rem] shadow-xl text-white text-center mb-6 lg:sticky lg:top-32">
+                    <p class="text-indigo-200 text-xs font-bold uppercase tracking-widest mb-2">Portfolio Market Value</p>
+                    <h2 id="total-v" class="text-4xl font-black font-mono tracking-tighter">NT$ 0</h2>
                 </div>
             </div>
 
-            <div id="p-night" class="hidden">
-                <div class="bg-slate-900 p-8 rounded-[3rem] text-white text-center shadow-2xl">
-                    <p class="text-indigo-400 font-bold mb-4 tracking-widest text-sm">NIGHT SESSION & ADR</p>
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="bg-white/5 p-4 rounded-2xl">
-                            <p class="text-[10px] text-slate-500 mb-1">台積電 ADR</p>
-                            <p id="adr-price" class="text-xl font-bold font-mono text-white">---</p>
-                        </div>
-                        <div class="bg-white/5 p-4 rounded-2xl">
-                            <p class="text-[10px] text-slate-500 mb-1">台指期夜盤</p>
-                            <p id="night-price" class="text-xl font-bold font-mono text-white">---</p>
-                        </div>
-                    </div>
+            <div class="lg:col-span-8">
+                <div id="p-inv" class="stock-grid"></div>
+                <div id="p-quo" class="hidden stock-grid"></div>
+                <div id="p-night" class="hidden">
+                    <div id="p-night-content"></div>
                 </div>
             </div>
         </div>
 
-        <div class="fixed bottom-8 left-4 right-4 z-30">
-            <details class="bg-white rounded-[2rem] shadow-2xl border overflow-hidden">
-                <summary class="list-none p-5 text-center font-black text-indigo-600 cursor-pointer">➕ 新增交易</summary>
-                <div class="p-6 space-y-4 border-t bg-slate-50">
-                    <div class="grid grid-cols-2 gap-3">
-                        <input type="text" id="s-code" placeholder="代碼" class="p-4 bg-white border rounded-2xl outline-none text-sm">
-                        <input type="text" id="s-name" placeholder="名稱" class="p-4 bg-white border rounded-2xl outline-none font-bold text-sm">
+        <div class="fixed bottom-10 left-0 right-0 px-4 z-20 flex justify-center">
+            <details class="w-full max-w-2xl bg-white rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.15)] border overflow-hidden">
+                <summary class="list-none p-6 text-center font-black text-indigo-600 cursor-pointer hover:bg-slate-50 transition text-lg">➕ 快速新增或修改持股</summary>
+                <div class="p-8 space-y-5 border-t bg-slate-50">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <input type="text" id="s-code" oninput="handleCodeInput(this.value)" placeholder="股票代碼 (2330)" class="p-5 bg-white border rounded-2xl outline-none text-base">
+                        <input type="text" id="s-name" placeholder="股票名稱" class="p-5 bg-white border rounded-2xl outline-none font-bold text-base">
                     </div>
-                    <div class="grid grid-cols-2 gap-3">
-                        <input type="number" id="s-shares" placeholder="股數" class="p-4 bg-white border rounded-2xl outline-none text-sm">
-                        <input type="number" id="s-cost" placeholder="成本" class="p-4 bg-white border rounded-2xl outline-none text-sm">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <input type="number" id="s-shares" placeholder="持有股數" class="p-5 bg-white border rounded-2xl outline-none text-base">
+                        <input type="number" id="s-cost" placeholder="成本單價" class="p-5 bg-white border rounded-2xl outline-none text-base">
                     </div>
-                    <button onclick="addStock()" class="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black">加入雲端庫存</button>
+                    <div class="flex gap-2">
+                        <button id="submit-btn" onclick="saveTransaction()" class="flex-1 bg-indigo-600 text-white p-5 rounded-2xl font-black text-lg shadow-lg hover:bg-indigo-700 transition">確認存入雲端</button>
+                        <button onclick="resetForm()" class="bg-slate-200 text-slate-500 px-6 rounded-2xl font-bold">取消</button>
+                    </div>
                 </div>
             </details>
+        </div>
+    </div>
+
+    <div id="modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-md z-50 flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-lg rounded-[2.5rem] p-10 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div class="flex justify-between items-center mb-8">
+                <h3 id="modal-title" class="text-2xl font-black text-slate-900"></h3>
+                <button onclick="closeModal()" class="text-slate-300 text-4xl font-light hover:text-slate-500">✕</button>
+            </div>
+            <div id="modal-content" class="space-y-2"></div>
         </div>
     </div>
 </body>
