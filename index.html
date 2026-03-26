@@ -3,23 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>台股雲端精算 Pro - 精確版</title>
+    <title>台股雲端精算 Pro - 極致版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <style>
-        .up-red { color: #ef4444; font-weight: 900; }
-        .down-green { color: #22c55e; font-weight: 900; }
-        .live-dot { width: 8px; height: 8px; background-color: #ef4444; border-radius: 50%; display: inline-block; animation: blink 1s infinite; margin-right: 6px; }
-        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
-        .tab-active { color: #4f46e5; border-bottom: 4px solid #4f46e5; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        
+        .up-red { color: #f43f5e; }
+        .down-green { color: #10b981; }
+        .bg-up { background-color: #fff1f2; color: #e11d48; }
+        .bg-down { background-color: #f0fdf4; color: #16a34a; }
+        
+        /* 滾動條隱藏 */
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        /* 行情頁：手機一排兩個，電腦一排三個 */
-        .quo-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; }
-        @media (min-width: 1024px) { .quo-grid { grid-template-columns: repeat(3, 1fr); gap: 1.5rem; } }
-        /* 損益頁：手機一排一個 */
-        .inv-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
-        @media (min-width: 1024px) { .inv-grid { grid-template-columns: repeat(2, 1fr); } }
+        
+        /* 玻璃擬態 */
+        .glass-card { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.3); }
+        
+        /* 行情卡片佈局 */
+        .quo-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        
+        /* 名稱截斷 */
+        .truncate-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+        /* 動畫 */
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(244, 63, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); } }
+        .live-pulse { animation: pulse-red 2s infinite; }
     </style>
 
     <script type="module">
@@ -27,12 +38,12 @@
         import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // --- 設定區 ---
-        const FEE_RATE = 0.001425; // 基本手續費
-        const FEE_DISCOUNT = 0.6;   // 假設 6 折 (可依據你的券商修改)
-        const MIN_FEE = 1;         // 零股最低手續費
-        const TAX_RATE_ETF = 0.001; // ETF 證交稅
-        const TAX_RATE_STOCK = 0.003; // 一般股票證交稅
+        // 費率設定 (可依券商調整)
+        const FEE_RATE = 0.001425;
+        const DISCOUNT = 0.6; 
+        const MIN_FEE = 1;
+        const TAX_ETF = 0.001;
+        const TAX_STOCK = 0.003;
 
         const firebaseConfig = {
             apiKey: "AIzaSyDsT-DHIht7TASNmb7GrUzJdAVxIlNNIMw",
@@ -51,34 +62,7 @@
         let stocks = [];
         let currentPrices = {};
         let nightInfo = { tx: { price: 0, pct: 0, change: 0 } };
-        let editingId = null;
         let chartInstance = null;
-
-        // --- 損益精算邏輯 ---
-        function calculateNetProfit(shares, buyPrice, currentPrice, code) {
-            const isETF = code.startsWith('00');
-            const taxRate = isETF ? TAX_RATE_ETF : TAX_RATE_STOCK;
-            
-            const buyCost = shares * buyPrice;
-            const sellValue = shares * currentPrice;
-
-            let buyFee = Math.floor(buyCost * FEE_RATE * FEE_DISCOUNT);
-            if (buyFee < MIN_FEE) buyFee = MIN_FEE;
-
-            let sellFee = Math.floor(sellValue * FEE_RATE * FEE_DISCOUNT);
-            if (sellFee < MIN_FEE) sellFee = MIN_FEE;
-
-            const sellTax = Math.floor(sellValue * taxRate);
-            
-            const totalCost = buyCost + buyFee;
-            const netReturn = sellValue - sellFee - sellTax;
-            const profit = netReturn - totalCost;
-
-            return {
-                profit: Math.round(profit),
-                pct: ((profit / totalCost) * 100).toFixed(2)
-            };
-        }
 
         onAuthStateChanged(auth, async (user) => {
             if (user) {
@@ -99,54 +83,133 @@
             render();
         }
 
+        // 精算損益
+        function getNet(shares, cost, nowPrice, code) {
+            const isETF = code.startsWith('00') || code.startsWith('01');
+            const tax = isETF ? TAX_ETF : TAX_STOCK;
+            const buyVal = shares * cost;
+            const sellVal = shares * nowPrice;
+            let f1 = Math.max(MIN_FEE, Math.floor(buyVal * FEE_RATE * DISCOUNT));
+            let f2 = Math.max(MIN_FEE, Math.floor(sellVal * FEE_RATE * DISCOUNT));
+            let t = Math.floor(sellVal * tax);
+            const profit = sellVal - buyVal - f1 - f2 - t;
+            return { val: Math.round(profit), pct: ((profit / (buyVal + f1)) * 100).toFixed(2) };
+        }
+
         window.handleCodeInput = async (code) => {
             if(code.length < 4) return;
-            try {
-                const res = await fetch(`https://corsproxy.io/?https://query2.finance.yahoo.com/v1/finance/search?q=${code}`);
-                const data = await res.json();
-                // 優先找台灣市場的 Quote
-                const found = data.quotes.find(q => q.symbol.includes(code) && (q.symbol.includes('.TW') || q.symbol.includes('.TWO')));
-                if(found) {
-                    // 優先使用 shortname (通常是中文)，若無則用 longname
-                    document.getElementById('s-name').value = found.shortname || found.longname || found.symbol;
-                }
-            } catch (e) {}
+            const res = await fetch(`https://corsproxy.io/?https://query2.finance.yahoo.com/v1/finance/search?q=${code}`);
+            const data = await res.json();
+            const found = data.quotes.find(q => (q.symbol.includes('.TW') || q.symbol.includes('.TWO')));
+            if(found) document.getElementById('s-name').value = found.shortname || found.longname;
         };
 
         async function fetchPrice(code) {
-            const suffixes = ['.TW', '.TWO'];
-            for(let s of suffixes) {
+            for(let s of ['.TW', '.TWO']) {
                 try {
                     const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${code}${s}`);
                     const data = await res.json();
                     if(data.chart.result) {
-                        const meta = data.chart.result[0].meta;
-                        currentPrices[code] = { 
-                            price: meta.regularMarketPrice, 
-                            prev: meta.previousClose, 
-                            pct: ((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2)
-                        };
+                        const m = data.chart.result[0].meta;
+                        currentPrices[code] = { price: m.regularMarketPrice, prev: m.previousClose, pct: ((m.regularMarketPrice - m.previousClose) / m.previousClose * 100).toFixed(2) };
                         render(); break;
                     }
-                } catch (e) {}
+                } catch(e) {}
             }
         }
 
         async function fetchNight() {
             try {
-                const symbol = encodeURIComponent('WTX=F'); // 台指期全
-                const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/${symbol}`);
-                const data = await res.json();
-                if (data.chart.result) {
-                    const meta = data.chart.result[0].meta;
-                    nightInfo.tx = { 
-                        price: meta.regularMarketPrice, 
-                        change: (meta.regularMarketPrice - meta.previousClose).toFixed(0), 
-                        pct: ((meta.regularMarketPrice - meta.previousClose) / meta.previousClose * 100).toFixed(2) 
-                    };
-                    render();
-                }
-            } catch (e) {}
+                const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/WTX%3DF`);
+                const d = await res.json();
+                const m = d.chart.result[0].meta;
+                nightInfo.tx = { price: m.regularMarketPrice, change: (m.regularMarketPrice - m.previousClose).toFixed(0), pct: ((m.regularMarketPrice - m.previousClose) / m.previousClose * 100).toFixed(2) };
+                render();
+            } catch(e) {}
+        }
+
+        window.fetchAllData = () => {
+            [...new Set(stocks.map(s => s.code))].forEach(fetchPrice);
+            fetchNight();
+            document.getElementById('update-time').innerText = `更新於 ${new Date().toLocaleTimeString()}`;
+        };
+
+        function startSync() { fetchAllData(); setInterval(fetchAllData, 15000); }
+
+        function render() {
+            const inv = document.getElementById('p-inv');
+            const quo = document.getElementById('p-quo');
+            const night = document.getElementById('p-night-box');
+            inv.innerHTML = ''; quo.innerHTML = '';
+
+            const sum = {};
+            stocks.forEach(s => {
+                if(!sum[s.code]) sum[s.code] = { name: s.name, shares: 0, cost: 0, info: currentPrices[s.code] || { price: 0, prev: 0, pct: 0 } };
+                sum[s.code].shares += s.shares;
+                sum[s.code].cost += (s.shares * s.cost);
+            });
+
+            let gV = 0, gP = 0, gPaid = 0;
+            Object.keys(sum).sort().forEach(code => {
+                const s = sum[code];
+                const net = getNet(s.shares, s.cost/s.shares, s.info.price, code);
+                const isUp = s.info.price >= s.info.prev;
+                gV += (s.shares * s.info.price); gPaid += s.cost; gP += net.val;
+
+                // 損益列表
+                inv.innerHTML += `
+                    <div class="bg-white p-5 rounded-2xl border border-slate-100 flex justify-between items-center mb-3 shadow-sm active:scale-95 transition" onclick="openModal('${code}')">
+                        <div class="flex-1 overflow-hidden mr-4">
+                            <p class="font-black text-slate-800 text-base truncate-name" onclick="event.stopPropagation(); alert('${s.name}')">${s.name}</p>
+                            <p class="text-[10px] text-slate-400 font-bold">${code} · ${s.shares.toLocaleString()} 股</p>
+                        </div>
+                        <div class="text-right">
+                            <p class="${net.val >= 0 ? 'up-red' : 'down-green'} text-lg font-black">${net.val > 0 ? '+' : ''}${net.val.toLocaleString()}</p>
+                            <p class="text-[10px] text-slate-400 font-bold">${net.pct}%</p>
+                        </div>
+                    </div>`;
+
+                // 行情列表 (一行兩個)
+                quo.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl border border-slate-100 flex flex-col shadow-sm" onclick="alert('${s.name}')">
+                        <div class="flex justify-between items-start mb-2">
+                            <span class="text-[10px] font-black px-2 py-0.5 bg-slate-100 rounded-md text-slate-500">${code}</span>
+                            <span class="text-[10px] font-bold ${isUp ? 'up-red' : 'down-green'}">${isUp?'▲':'▼'}${Math.abs(s.info.pct)}%</span>
+                        </div>
+                        <p class="text-xs font-bold text-slate-400 truncate-name mb-1">${s.name}</p>
+                        <p class="text-xl font-black font-mono ${isUp ? 'up-red' : 'down-green'}">${s.info.price.toFixed(2)}</p>
+                    </div>`;
+            });
+
+            night.innerHTML = `
+                <div class="bg-slate-900 p-8 rounded-[2.5rem] text-center border-b-4 border-indigo-500 shadow-2xl">
+                    <div class="flex items-center justify-center gap-2 mb-2">
+                        <span class="w-2 h-2 rounded-full bg-red-500 live-pulse"></span>
+                        <p class="text-indigo-400 text-[10px] font-black tracking-widest uppercase">TX Night Session</p>
+                    </div>
+                    <h3 class="text-5xl font-black font-mono text-white mb-4">${nightInfo.tx.price}</h3>
+                    <div class="flex justify-center gap-4">
+                        <span class="px-4 py-1 rounded-full text-sm font-bold ${nightInfo.tx.change >= 0 ? 'bg-up' : 'bg-down'}">${nightInfo.tx.change > 0 ? '+' : ''}${nightInfo.tx.change}</span>
+                        <span class="px-4 py-1 rounded-full text-sm font-bold ${nightInfo.tx.pct >= 0 ? 'bg-up' : 'bg-down'}">${nightInfo.tx.pct}%</span>
+                    </div>
+                </div>`;
+            
+            document.getElementById('total-v').innerText = `NT$ ${Math.round(gV).toLocaleString()}`;
+            document.getElementById('total-p').innerText = `預估淨損益 NT$ ${Math.round(gP).toLocaleString()} (${((gP/gPaid)*100).toFixed(2)}%)`;
+            document.getElementById('total-p').className = `text-[11px] font-black px-4 py-1.5 rounded-full ${gP >= 0 ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-500'}`;
+            updateChart(sum);
+        }
+
+        function updateChart(sum) {
+            const ctx = document.getElementById('assetChart');
+            if(chartInstance) chartInstance.destroy();
+            const labels = Object.values(sum).map(s => s.name);
+            const vals = Object.values(sum).map(s => s.shares * s.info.price);
+            chartInstance = new Chart(ctx, {
+                type: 'doughnut',
+                data: { labels, datasets: [{ data: vals, backgroundColor: ['#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6'], borderWidth: 4, borderColor: '#ffffff' }] },
+                options: { plugins: { legend: { display: false } }, cutout: '80%' }
+            });
         }
 
         window.saveTransaction = async () => {
@@ -155,226 +218,114 @@
             const shares = parseFloat(document.getElementById('s-shares').value);
             const cost = parseFloat(document.getElementById('s-cost').value);
             if(code && shares && cost) {
-                if(editingId) {
-                    const idx = stocks.findIndex(s => s.id === editingId);
-                    if(idx !== -1) stocks[idx] = { ...stocks[idx], code, name: name || code, shares, cost };
-                    editingId = null;
-                } else {
-                    stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
-                }
+                stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
                 await setDoc(doc(db, "users", currentUser.uid), { stocks });
-                resetForm();
-                fetchAllData();
+                resetForm(); fetchAllData();
             }
         };
 
-        window.fetchAllData = () => {
-            [...new Set(stocks.map(s => s.code))].forEach(fetchPrice);
-            fetchNight();
-            document.getElementById('update-time').innerText = `Sync: ${new Date().toLocaleTimeString()}`;
+        window.deleteTx = async (id) => {
+            if(confirm('刪除此筆交易？')) { stocks = stocks.filter(s => s.id !== id); await setDoc(doc(db, "users", currentUser.uid), { stocks }); render(); closeModal(); }
         };
-
-        function startSync() { fetchAllData(); setInterval(fetchAllData, 20000); }
-
-        function render() {
-            const inv = document.getElementById('p-inv');
-            const quo = document.getElementById('p-quo');
-            const nightBox = document.getElementById('p-night-box');
-            inv.innerHTML = ''; quo.innerHTML = '';
-
-            const summary = {};
-            const chartData = { labels: [], values: [] };
-
-            stocks.forEach(s => {
-                const info = currentPrices[s.code] || { price: 0, pct: 0, prev: 0 };
-                if(!summary[s.code]) summary[s.code] = { name: s.name, shares: 0, totalPaid: 0, info };
-                summary[s.code].shares += s.shares;
-                summary[s.code].totalPaid += (s.shares * s.cost);
-            });
-
-            let gVal = 0, gNetProfit = 0, gPaid = 0;
-
-            Object.keys(summary).sort().forEach(code => {
-                const s = summary[code];
-                const avgCost = s.totalPaid / s.shares;
-                const net = calculateNetProfit(s.shares, avgCost, s.info.price, code);
-                
-                const isUp = s.info.price >= s.info.prev;
-                gVal += (s.shares * s.info.price);
-                gPaid += s.totalPaid;
-                gNetProfit += net.profit;
-
-                chartData.labels.push(s.name);
-                chartData.values.push(Math.round(s.shares * s.info.price));
-
-                // 損益分頁卡片
-                inv.innerHTML += `
-                    <div class="bg-white p-5 rounded-3xl border flex justify-between items-center shadow-sm" onclick="openModal('${code}')">
-                        <div>
-                            <p class="font-black text-lg text-slate-900 leading-tight">${s.name}</p>
-                            <p class="text-[10px] text-slate-400 font-bold uppercase">${code} · ${s.shares.toLocaleString()} 股</p>
-                        </div>
-                        <div class="text-right">
-                            <p class="${net.profit >= 0 ? 'up-red' : 'down-green'} text-lg">${net.profit > 0 ? '+' : ''}${net.profit.toLocaleString()}</p>
-                            <p class="text-[10px] text-slate-300 font-bold">${net.pct}% (含稅費)</p>
-                        </div>
-                    </div>`;
-
-                // 即時行情卡片 (雙欄設計)
-                quo.innerHTML += `
-                    <div class="bg-white p-4 rounded-2xl border flex flex-col justify-center shadow-sm">
-                        <p class="text-sm font-black text-slate-700 truncate">${s.name}</p>
-                        <div class="flex justify-between items-end mt-1">
-                            <span class="text-lg font-mono font-black ${isUp ? 'up-red' : 'down-green'}">${s.info.price.toFixed(2)}</span>
-                            <span class="text-[10px] font-bold ${isUp ? 'up-red' : 'down-green'}">${isUp ? '▲' : '▼'}${Math.abs(s.info.pct)}%</span>
-                        </div>
-                    </div>`;
-            });
-
-            nightBox.innerHTML = `
-                <div class="bg-slate-900 p-8 rounded-[2.5rem] text-center shadow-2xl border border-indigo-500/30">
-                    <p class="text-indigo-400 font-bold mb-2 tracking-widest text-xs uppercase">台指期夜盤 (WTX=F)</p>
-                    <h3 class="text-5xl font-black font-mono mb-3 ${nightInfo.tx.pct >= 0 ? 'up-red' : 'down-green'}">${nightInfo.tx.price}</h3>
-                    <div class="flex justify-center gap-4">
-                        <span class="text-lg font-bold ${nightInfo.tx.pct >= 0 ? 'up-red' : 'down-green'}">${nightInfo.tx.change}</span>
-                        <span class="text-lg font-bold ${nightInfo.tx.pct >= 0 ? 'up-red' : 'down-green'}">${nightInfo.tx.pct}%</span>
-                    </div>
-                </div>`;
-            
-            document.getElementById('total-v').innerText = `NT$ ${Math.round(gVal).toLocaleString()}`;
-            document.getElementById('total-p').innerText = `實質損益 NT$ ${Math.round(gNetProfit).toLocaleString()} (${((gNetProfit/gPaid)*100).toFixed(2)}%)`;
-            document.getElementById('total-p').className = `text-sm font-black px-5 py-2 rounded-full ${gNetProfit >= 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`;
-
-            updateChart(chartData);
-        }
-
-        // --- 其他 UI 控制函式 ---
-        function updateChart(data) {
-            const ctx = document.getElementById('assetChart');
-            if(chartInstance) chartInstance.destroy();
-            chartInstance = new Chart(ctx, {
-                type: 'doughnut',
-                data: { labels: data.labels, datasets: [{ data: data.values, backgroundColor: ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#06b6d4'], borderWidth: 0 }] },
-                options: { plugins: { legend: { display: false } }, cutout: '75%' }
-            });
-        }
 
         window.openModal = (code) => {
             const m = document.getElementById('modal');
             const c = document.getElementById('modal-content');
             const list = stocks.filter(s => s.code === code);
-            document.getElementById('modal-title').innerText = `${list[0].name} 明細`;
+            document.getElementById('modal-title').innerText = list[0].name;
             c.innerHTML = list.map(r => `
-                <div class="flex justify-between items-center p-4 bg-slate-50 rounded-2xl mb-2 border">
-                    <p class="font-bold text-sm">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
-                    <div class="flex gap-2">
-                        <button onclick="fillEditForm(${r.id})" class="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-[10px] font-bold">編輯</button>
-                        <button onclick="deleteTx(${r.id})" class="bg-red-500 text-white px-3 py-1.5 rounded-xl text-[10px] font-bold">刪除</button>
-                    </div>
+                <div class="flex justify-between items-center p-4 bg-slate-50 rounded-xl mb-2">
+                    <p class="text-sm font-bold text-slate-600">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
+                    <button onclick="deleteTx(${r.id})" class="text-xs text-red-500 font-black">刪除</button>
                 </div>`).join('');
             m.classList.remove('hidden');
         };
 
-        window.fillEditForm = (id) => {
-            const s = stocks.find(item => item.id === id);
-            editingId = id;
-            document.getElementById('s-code').value = s.code;
-            document.getElementById('s-name').value = s.name;
-            document.getElementById('s-shares').value = s.shares;
-            document.getElementById('s-cost').value = s.cost;
-            document.getElementById('submit-btn').innerText = "更新紀錄";
-            document.querySelector('details').open = true;
-            document.getElementById('modal').classList.add('hidden');
-        };
-
-        window.deleteTx = async (id) => {
-            if(confirm('確認刪除？')) { stocks = stocks.filter(s => s.id !== id); await setDoc(doc(db, "users", currentUser.uid), { stocks }); render(); document.getElementById('modal').classList.add('hidden'); }
-        };
-
-        window.closeModal = () => document.getElementById('modal').classList.add('hidden');
         window.switchTab = (tab) => {
             ['p-inv', 'p-quo', 'p-night', 'p-ana'].forEach(p => document.getElementById(p).classList.add('hidden'));
             document.getElementById(`p-${tab}`).classList.remove('hidden');
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active'));
-            event.target.classList.add('tab-active');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.replace('text-indigo-600', 'text-slate-400'));
+            event.currentTarget.classList.replace('text-slate-400', 'text-indigo-600');
         };
+        
+        window.closeModal = () => document.getElementById('modal').classList.add('hidden');
         window.logout = () => signOut(auth);
-        window.resetForm = () => { editingId = null; document.getElementById('s-code').value = ''; document.getElementById('s-name').value = ''; document.getElementById('s-shares').value = ''; document.getElementById('s-cost').value = ''; document.getElementById('submit-btn').innerText = "確認存入雲端"; document.querySelector('details').open = false; };
-        window.authAction = async (type) => {
+        window.resetForm = () => { document.getElementById('s-code').value=''; document.getElementById('s-name').value=''; document.getElementById('s-shares').value=''; document.getElementById('s-cost').value=''; document.querySelector('details').open=false; };
+        window.authAction = async () => {
             const email = document.getElementById('email').value;
             const pass = document.getElementById('pass').value;
-            try { await signInWithEmailAndPassword(auth, email, pass); } catch (e) { alert("登入失敗，請檢查帳密"); }
+            try { await signInWithEmailAndPassword(auth, email, pass); } catch (e) { alert("登入失敗"); }
         };
     </script>
 </head>
-<body class="bg-slate-50 text-slate-900 pb-40 min-h-screen font-sans">
+<body class="bg-slate-50 pb-32">
 
-    <div id="auth-page" class="flex flex-col items-center justify-center min-h-screen p-6 bg-slate-900">
-        <div class="w-full max-w-md bg-slate-800 p-10 rounded-[3rem] shadow-2xl text-center">
-            <h1 class="text-3xl font-black text-indigo-500 mb-2">台股精算 Pro</h1>
-            <p class="text-slate-400 text-sm">您的雲端資產管家</p>
-            <div class="space-y-4 mt-8">
-                <input type="email" id="email" placeholder="Email" class="w-full p-4 bg-slate-700 text-white rounded-2xl outline-none border-none">
-                <input type="password" id="pass" placeholder="Password" class="w-full p-4 bg-slate-700 text-white rounded-2xl outline-none border-none">
-                <button onclick="authAction('login')" class="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black text-lg shadow-lg">登入系統</button>
+    <div id="auth-page" class="flex flex-col items-center justify-center min-h-screen p-8 bg-slate-900">
+        <div class="w-full max-w-sm">
+            <h1 class="text-white text-4xl font-black mb-2 text-center">台股精算 <span class="text-indigo-500">Pro</span></h1>
+            <p class="text-slate-500 text-center text-sm mb-10">Real-time Cloud Portfolio</p>
+            <div class="space-y-4">
+                <input type="email" id="email" placeholder="電子信箱" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
+                <input type="password" id="pass" placeholder="密碼" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
+                <button onclick="authAction()" class="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black text-lg">進入系統</button>
             </div>
         </div>
     </div>
 
-    <div id="main-page" class="hidden max-w-5xl mx-auto px-4">
-        <div class="py-6 flex justify-between items-center">
-            <div class="flex items-center"><span class="live-dot"></span><span class="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Live Syncing</span></div>
-            <button onclick="logout()" class="text-xs text-slate-400 font-bold border px-3 py-1 rounded-full">登出</button>
-        </div>
-
-        <div class="bg-indigo-600 p-8 rounded-[2.5rem] shadow-xl text-white text-center mb-6">
-            <p class="text-indigo-200 text-[10px] font-bold uppercase mb-1 tracking-widest">Market Value</p>
-            <h2 id="total-v" class="text-4xl font-black font-mono tracking-tighter mb-4">NT$ 0</h2>
-            <span id="total-p" class="inline-block">--</span>
-            <p id="update-time" class="mt-4 text-[9px] text-indigo-300 font-mono"></p>
-        </div>
-
-        <div class="flex bg-white rounded-3xl shadow-sm mb-6 overflow-hidden">
-            <button onclick="switchTab('inv')" class="tab-btn flex-1 py-4 font-black tab-active text-sm">損益</button>
-            <button onclick="switchTab('quo')" class="tab-btn flex-1 py-4 font-black text-slate-400 text-sm">行情</button>
-            <button onclick="switchTab('night')" class="tab-btn flex-1 py-4 font-black text-slate-400 text-sm">夜盤</button>
-            <button onclick="switchTab('ana')" class="tab-btn flex-1 py-4 font-black text-slate-400 text-sm">分析</button>
-        </div>
-
-        <div id="p-inv" class="inv-grid"></div>
-        <div id="p-quo" class="hidden quo-grid"></div>
-        <div id="p-night" class="hidden"><div id="p-night-box"></div></div>
-        <div id="p-ana" class="hidden">
-            <div class="bg-white p-10 rounded-[3rem] shadow-sm flex flex-col items-center">
-                <div class="w-full max-w-[250px]"><canvas id="assetChart"></canvas></div>
+    <div id="main-page" class="hidden">
+        <header class="px-6 py-8">
+            <div class="flex justify-between items-center mb-6">
+                <div>
+                    <h2 id="total-v" class="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-2">NT$ 0</h2>
+                    <span id="total-p">--</span>
+                </div>
+                <button onclick="logout()" class="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100">
+                    <span class="text-xs">🚪</span>
+                </button>
             </div>
-        </div>
+            
+            <nav class="flex justify-between bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
+                <button onclick="switchTab('inv')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-indigo-600">持股</button>
+                <button onclick="switchTab('quo')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">行情</button>
+                <button onclick="switchTab('night')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">夜盤</button>
+                <button onclick="switchTab('ana')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">分析</button>
+            </nav>
+        </header>
 
-        <div class="fixed bottom-8 left-0 right-0 px-4 z-20 flex justify-center">
-            <details class="w-full max-w-xl bg-white rounded-[2rem] shadow-2xl border overflow-hidden">
-                <summary class="list-none p-5 text-center font-black text-indigo-600 cursor-pointer hover:bg-slate-50 transition">＋ 新增/修改持股紀錄</summary>
-                <div class="p-6 space-y-4 border-t bg-slate-50">
+        <main class="px-6">
+            <div id="p-inv"></div>
+            <div id="p-quo" class="hidden quo-grid"></div>
+            <div id="p-night" class="hidden"><div id="p-night-box"></div></div>
+            <div id="p-ana" class="hidden">
+                <div class="bg-white p-10 rounded-3xl shadow-sm border border-slate-100 flex justify-center">
+                    <div class="w-48 h-48"><canvas id="assetChart"></canvas></div>
+                </div>
+            </div>
+            <p id="update-time" class="text-center text-[9px] text-slate-300 font-bold mt-6 uppercase tracking-widest"></p>
+        </main>
+
+        <div class="fixed bottom-6 left-0 right-0 px-6 z-40">
+            <details class="bg-white rounded-[2rem] shadow-2xl border border-slate-200 overflow-hidden">
+                <summary class="list-none p-5 text-center font-black text-indigo-600 cursor-pointer">＋ 新增庫存紀錄</summary>
+                <div class="p-6 space-y-4 bg-slate-50">
                     <div class="grid grid-cols-2 gap-3">
-                        <input type="text" id="s-code" oninput="handleCodeInput(this.value)" placeholder="代碼 (如 0050)" class="p-4 bg-white border rounded-xl outline-none text-sm">
-                        <input type="text" id="s-name" placeholder="中文名稱" class="p-4 bg-white border rounded-xl outline-none text-sm font-bold">
+                        <input type="text" id="s-code" oninput="handleCodeInput(this.value)" placeholder="代碼" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
+                        <input type="text" id="s-name" placeholder="名稱" class="p-4 bg-white rounded-xl outline-none text-sm font-bold border border-slate-200">
                     </div>
                     <div class="grid grid-cols-2 gap-3">
-                        <input type="number" id="s-shares" placeholder="股數" class="p-4 bg-white border rounded-xl outline-none text-sm">
-                        <input type="number" id="s-cost" placeholder="買入價格" class="p-4 bg-white border rounded-xl outline-none text-sm">
+                        <input type="number" id="s-shares" placeholder="股數" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
+                        <input type="number" id="s-cost" placeholder="成本" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
                     </div>
-                    <div class="flex gap-2">
-                        <button id="submit-btn" onclick="saveTransaction()" class="flex-1 bg-indigo-600 text-white p-4 rounded-xl font-black">存入雲端</button>
-                        <button onclick="resetForm()" class="bg-slate-200 text-slate-500 px-5 rounded-xl font-bold text-sm">取消</button>
-                    </div>
+                    <button onclick="saveTransaction()" class="w-full bg-indigo-600 text-white p-4 rounded-xl font-black">存入雲端數據</button>
                 </div>
             </details>
         </div>
     </div>
 
-    <div id="modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div id="modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
         <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl">
             <div class="flex justify-between items-center mb-6">
-                <h3 id="modal-title" class="text-xl font-black"></h3>
+                <h3 id="modal-title" class="text-xl font-black text-slate-900"></h3>
                 <button onclick="closeModal()" class="text-slate-300 text-2xl">✕</button>
             </div>
             <div id="modal-content"></div>
