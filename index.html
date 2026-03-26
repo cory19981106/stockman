@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>台股雲端精算 Pro - 極致版</title>
+    <title>台股雲端精算 Pro - 自選版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
@@ -21,7 +21,6 @@
         
         .no-scrollbar::-webkit-scrollbar { display: none; }
         
-        /* 行情卡片佈局：minmax(0, 1fr) 防止破版 */
         .quo-grid { 
             display: grid; 
             grid-template-columns: repeat(2, minmax(0, 1fr)); 
@@ -36,9 +35,6 @@
             width: 100%; 
             display: block;
         }
-
-        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(244, 63, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); } }
-        .live-pulse { animation: pulse-red 2s infinite; }
     </style>
 
     <script type="module">
@@ -46,7 +42,6 @@
         import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // 費率設定
         const FEE_RATE = 0.001425;
         const DISCOUNT = 0.6; 
         const MIN_FEE = 1;
@@ -68,8 +63,8 @@
 
         let currentUser = null;
         let stocks = [];
+        let watchlist = []; // 自選清單
         let currentPrices = {};
-        let futuresInfo = { tx: { price: 0, pct: 0, change: 0 } };
         let chartInstance = null;
 
         onAuthStateChanged(auth, async (user) => {
@@ -77,7 +72,7 @@
                 currentUser = user;
                 document.getElementById('auth-page').classList.add('hidden');
                 document.getElementById('main-page').classList.remove('hidden');
-                await loadStocks();
+                await loadUserData();
                 startSync();
             } else {
                 document.getElementById('auth-page').classList.remove('hidden');
@@ -85,10 +80,18 @@
             }
         });
 
-        async function loadStocks() {
+        async function loadUserData() {
             const docSnap = await getDoc(doc(db, "users", currentUser.uid));
-            if (docSnap.exists()) stocks = docSnap.data().stocks || [];
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                stocks = data.stocks || [];
+                watchlist = data.watchlist || [];
+            }
             render();
+        }
+
+        async function saveUserData() {
+            await setDoc(doc(db, "users", currentUser.uid), { stocks, watchlist });
         }
 
         function getNet(shares, cost, nowPrice, code) {
@@ -103,13 +106,13 @@
             return { val: Math.round(profit), pct: ((profit / (buyVal + f1)) * 100).toFixed(2) };
         }
 
-        window.handleCodeInput = async (code) => {
+        window.handleCodeInput = async (code, targetId) => {
             if(code.length < 4) return;
             try {
                 const res = await fetch(`https://corsproxy.io/?https://query2.finance.yahoo.com/v1/finance/search?q=${code}`);
                 const data = await res.json();
                 const found = data.quotes.find(q => (q.symbol.includes('.TW') || q.symbol.includes('.TWO')));
-                if(found) document.getElementById('s-name').value = found.shortname || found.longname;
+                if(found) document.getElementById(targetId).value = found.shortname || found.longname;
             } catch(e) {}
         };
 
@@ -127,24 +130,9 @@
             }
         }
 
-        async function fetchFutures() {
-            try {
-                // 使用 Yahoo Finance 的台指期連續合約代碼
-                const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/WTX%3DF`);
-                const d = await res.json();
-                const m = d.chart.result[0].meta;
-                futuresInfo.tx = { 
-                    price: m.regularMarketPrice, 
-                    change: (m.regularMarketPrice - m.previousClose).toFixed(0), 
-                    pct: ((m.regularMarketPrice - m.previousClose) / m.previousClose * 100).toFixed(2) 
-                };
-                render();
-            } catch(e) {}
-        }
-
         window.fetchAllData = () => {
-            [...new Set(stocks.map(s => s.code))].forEach(fetchPrice);
-            fetchFutures();
+            const allCodes = [...new Set([...stocks.map(s => s.code), ...watchlist.map(w => w.code)])];
+            allCodes.forEach(fetchPrice);
             document.getElementById('update-time').innerText = `更新於 ${new Date().toLocaleTimeString()}`;
         };
 
@@ -153,9 +141,10 @@
         function render() {
             const inv = document.getElementById('p-inv');
             const quo = document.getElementById('p-quo');
-            const futBox = document.getElementById('p-fut-box');
-            inv.innerHTML = ''; quo.innerHTML = '';
+            const watchListDiv = document.getElementById('p-watch-list');
+            inv.innerHTML = ''; quo.innerHTML = ''; watchListDiv.innerHTML = '';
 
+            // 持股邏輯
             const sum = {};
             stocks.forEach(s => {
                 if(!sum[s.code]) sum[s.code] = { name: s.name, shares: 0, cost: 0, info: currentPrices[s.code] || { price: 0, prev: 0, pct: 0 } };
@@ -170,7 +159,6 @@
                 const isUp = s.info.price >= s.info.prev;
                 gV += (s.shares * s.info.price); gPaid += s.cost; gP += net.val;
 
-                // 持股清單
                 inv.innerHTML += `
                     <div class="bg-white p-5 rounded-2xl border border-slate-100 flex justify-between items-center mb-3 shadow-sm active:scale-95 transition" onclick="openModal('${code}')">
                         <div class="flex-1 overflow-hidden mr-2">
@@ -183,7 +171,6 @@
                         </div>
                     </div>`;
 
-                // 行情清單
                 quo.innerHTML += `
                     <div class="bg-white p-3.5 rounded-2xl border border-slate-100 flex flex-col shadow-sm">
                         <div class="flex justify-between items-start mb-1">
@@ -195,26 +182,48 @@
                     </div>`;
             });
 
-            // 台指期盤後顯示
-            futBox.innerHTML = `
-                <div class="bg-slate-900 p-8 rounded-[2.5rem] text-center border-b-4 border-indigo-500 shadow-2xl">
-                    <div class="flex items-center justify-center gap-2 mb-2">
-                        <span class="w-2 h-2 rounded-full bg-red-500 live-pulse"></span>
-                        <p class="text-indigo-400 text-[10px] font-black tracking-widest uppercase">TX Futures After-Hours</p>
-                    </div>
-                    <h3 class="text-5xl font-black font-mono text-white mb-4">${futuresInfo.tx.price}</h3>
-                    <div class="flex justify-center gap-4">
-                        <span class="px-4 py-1 rounded-full text-sm font-bold ${futuresInfo.tx.change >= 0 ? 'bg-up' : 'bg-down'}">${futuresInfo.tx.change > 0 ? '+' : ''}${futuresInfo.tx.change}</span>
-                        <span class="px-4 py-1 rounded-full text-sm font-bold ${futuresInfo.tx.change >= 0 ? 'bg-up' : 'bg-down'}">${futuresInfo.tx.pct}%</span>
-                    </div>
-                    <p class="text-slate-500 text-[9px] mt-6 font-bold tracking-widest">台指期 盤後行情 (WTXP&)</p>
-                </div>`;
+            // 自選清單渲染
+            watchlist.forEach(w => {
+                const info = currentPrices[w.code] || { price: 0, prev: 0, pct: 0 };
+                const isUp = info.price >= info.prev;
+                watchListDiv.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl border border-slate-100 flex justify-between items-center mb-2 shadow-sm">
+                        <div class="flex-1" onclick="fetchPrice('${w.code}')">
+                            <p class="font-black text-slate-800 text-sm truncate-name">${w.name}</p>
+                            <p class="text-[10px] text-slate-400 font-bold">${w.code}</p>
+                        </div>
+                        <div class="text-right mr-4">
+                            <p class="${isUp ? 'up-red' : 'down-green'} text-base font-black font-mono">${info.price.toFixed(2)}</p>
+                            <p class="${isUp ? 'up-red' : 'down-green'} text-[10px] font-bold">${isUp?'▲':'▼'}${Math.abs(info.pct)}%</p>
+                        </div>
+                        <button onclick="removeFromWatchlist('${w.code}')" class="text-slate-300 hover:text-red-500">✕</button>
+                    </div>`;
+            });
             
             document.getElementById('total-v').innerText = `NT$ ${Math.round(gV).toLocaleString()}`;
             document.getElementById('total-p').innerText = `預估損益 NT$ ${Math.round(gP).toLocaleString()} (${gPaid > 0 ? ((gP/gPaid)*100).toFixed(2) : '0.00'}%)`;
             document.getElementById('total-p').className = `text-[11px] font-black px-4 py-1.5 rounded-full ${gP >= 0 ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-500'}`;
             updateChart(sum);
         }
+
+        // 自選股功能
+        window.addToWatchlist = async () => {
+            const code = document.getElementById('w-code').value.trim();
+            const name = document.getElementById('w-name').value.trim();
+            if(code && !watchlist.find(x => x.code === code)) {
+                watchlist.push({ code, name: name || code });
+                await saveUserData();
+                document.getElementById('w-code').value = '';
+                document.getElementById('w-name').value = '';
+                fetchAllData();
+            }
+        };
+
+        window.removeFromWatchlist = async (code) => {
+            watchlist = watchlist.filter(x => x.code !== code);
+            await saveUserData();
+            render();
+        };
 
         function updateChart(sum) {
             const ctx = document.getElementById('assetChart');
@@ -223,9 +232,7 @@
             
             const colors = ['#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899'];
             const entries = Object.entries(sum).map(([code, s]) => ({
-                code,
-                name: s.name,
-                value: s.shares * s.info.price
+                code, name: s.name, value: s.shares * s.info.price
             })).sort((a, b) => b.value - a.value);
 
             const labels = entries.map(e => e.name);
@@ -243,25 +250,16 @@
                 options: { plugins: { legend: { display: false } }, cutout: '75%' }
             });
 
-            // 圓餅圖下方的資產佔比清單
             listContainer.innerHTML = entries.map((e, i) => {
                 const pct = ((e.value / totalValue) * 100).toFixed(1);
                 const color = colors[i % colors.length];
-                return `
-                    <div class="flex justify-between items-center py-1">
-                        <div class="flex items-center gap-3 overflow-hidden">
-                            <div class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: ${color}"></div>
-                            <div class="flex flex-col overflow-hidden">
-                                <span class="text-sm font-black text-slate-700 truncate">${e.name}</span>
-                                <span class="text-[10px] text-slate-400 font-bold">${e.code}</span>
-                            </div>
-                        </div>
-                        <div class="text-right">
-                            <p class="text-sm font-mono font-black text-slate-700">NT$ ${Math.round(e.value).toLocaleString()}</p>
-                            <p class="text-[10px] font-black text-indigo-500">${pct}%</p>
-                        </div>
+                return `<div class="flex justify-between items-center py-1">
+                    <div class="flex items-center gap-3 overflow-hidden">
+                        <div class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: ${color}"></div>
+                        <div class="flex flex-col overflow-hidden"><span class="text-sm font-black text-slate-700 truncate">${e.name}</span><span class="text-[10px] text-slate-400 font-bold">${e.code}</span></div>
                     </div>
-                `;
+                    <div class="text-right"><p class="text-sm font-mono font-black text-slate-700">NT$ ${Math.round(e.value).toLocaleString()}</p><p class="text-[10px] font-black text-indigo-500">${pct}%</p></div>
+                </div>`;
             }).join('');
         }
 
@@ -272,13 +270,13 @@
             const cost = parseFloat(document.getElementById('s-cost').value);
             if(code && shares && cost) {
                 stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
-                await setDoc(doc(db, "users", currentUser.uid), { stocks });
+                await saveUserData();
                 resetForm(); fetchAllData();
             }
         };
 
         window.deleteTx = async (id) => {
-            if(confirm('刪除此筆交易？')) { stocks = stocks.filter(s => s.id !== id); await setDoc(doc(db, "users", currentUser.uid), { stocks }); render(); closeModal(); }
+            if(confirm('刪除此筆交易？')) { stocks = stocks.filter(s => s.id !== id); await saveUserData(); render(); closeModal(); }
         };
 
         window.openModal = (code) => {
@@ -295,7 +293,7 @@
         };
 
         window.switchTab = (tab) => {
-            ['p-inv', 'p-quo', 'p-fut', 'p-ana'].forEach(p => document.getElementById(p).classList.add('hidden'));
+            ['p-inv', 'p-quo', 'p-watch', 'p-ana'].forEach(p => document.getElementById(p).classList.add('hidden'));
             const activePage = document.getElementById(`p-${tab}`);
             if (tab === 'quo') {
                 activePage.classList.remove('hidden');
@@ -322,7 +320,7 @@
     <div id="auth-page" class="flex flex-col items-center justify-center min-h-screen p-8 bg-slate-900">
         <div class="w-full max-w-sm">
             <h1 class="text-white text-4xl font-black mb-2 text-center">台股精算 <span class="text-indigo-500">Pro</span></h1>
-            <p class="text-slate-500 text-center text-sm mb-10">Real-time Cloud Portfolio</p>
+            <p class="text-slate-500 text-center text-sm mb-10">Watchlist & Portfolio</p>
             <div class="space-y-4">
                 <input type="email" id="email" placeholder="電子信箱" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
                 <input type="password" id="pass" placeholder="密碼" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
@@ -346,7 +344,7 @@
             <nav class="flex justify-between bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
                 <button onclick="switchTab('inv')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-indigo-600">持股</button>
                 <button onclick="switchTab('quo')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">行情</button>
-                <button onclick="switchTab('fut')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">台指期</button>
+                <button onclick="switchTab('watch')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">自選</button>
                 <button onclick="switchTab('ana')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">分析</button>
             </nav>
         </header>
@@ -354,7 +352,18 @@
         <main class="px-6">
             <div id="p-inv"></div>
             <div id="p-quo" class="hidden"></div>
-            <div id="p-fut" class="hidden"><div id="p-fut-box"></div></div>
+            
+            <div id="p-watch" class="hidden">
+                <div class="bg-indigo-50 p-4 rounded-2xl mb-4 border border-indigo-100">
+                    <div class="flex gap-2">
+                        <input type="text" id="w-code" oninput="handleCodeInput(this.value, 'w-name')" placeholder="股票代碼" class="flex-[1] p-3 rounded-xl text-sm border-none outline-none">
+                        <input type="text" id="w-name" placeholder="名稱" class="flex-[1] p-3 rounded-xl text-sm border-none outline-none font-bold">
+                        <button onclick="addToWatchlist()" class="bg-indigo-600 text-white px-4 rounded-xl font-black">＋</button>
+                    </div>
+                </div>
+                <div id="p-watch-list"></div>
+            </div>
+
             <div id="p-ana" class="hidden">
                 <div class="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
                     <div class="flex justify-center mb-10">
@@ -374,7 +383,7 @@
                 <summary class="list-none p-5 text-center font-black text-indigo-600 cursor-pointer">＋ 新增庫存紀錄</summary>
                 <div class="p-6 space-y-4 bg-slate-50">
                     <div class="grid grid-cols-2 gap-3">
-                        <input type="text" id="s-code" oninput="handleCodeInput(this.value)" placeholder="代碼" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
+                        <input type="text" id="s-code" oninput="handleCodeInput(this.value, 's-name')" placeholder="代碼" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
                         <input type="text" id="s-name" placeholder="名稱" class="p-4 bg-white rounded-xl outline-none text-sm font-bold border border-slate-200">
                     </div>
                     <div class="grid grid-cols-2 gap-3">
