@@ -22,7 +22,12 @@
         summary::-webkit-details-marker { display: none; }
         summary { list-style: none; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
+        
+        /* K線圖容器 */
         #tv-chart-container { width: 100%; height: 320px; border-radius: 1.5rem; overflow: hidden; background: #f1f5f9; position: relative; }
+        
+        /* 週期切換鈕樣式 */
+        .interval-btn.active { background-color: #6366f1 !important; color: white !important; }
     </style>
 
     <script type="module">
@@ -44,7 +49,7 @@
         const db = getFirestore(app);
 
         let currentUser = null, stocks = [], watchlist = [], currentPrices = {}, chartInstance = null;
-        let editingId = null; // 追蹤編輯狀態
+        let editingId = null; // 用於追蹤編輯狀態
 
         onAuthStateChanged(auth, async (user) => {
             if (user) {
@@ -173,18 +178,15 @@
             return info.market === '.TWO' ? `OTC:${code}` : `TWSE:${code}`;
         }
 
-        window.openStockDetails = (code) => {
-            const info = currentPrices[code];
-            const name = watchlist.find(w => w.code === code)?.name || stocks.find(s => s.code === code)?.name || code;
-            document.getElementById('modal-title').innerText = `${name} (${code})`;
-            
-            // 載入 TradingView 進階圖表
+        // 載入 K 線圖 (支援週期切換)
+        window.loadTVChart = (code, interval = 'D') => {
             const container = document.getElementById('tv-chart-container');
             container.innerHTML = `<div id="tv-advanced-widget" style="height:100%; width:100%;"></div>`;
+            
             new TradingView.widget({
                 "autosize": true,
                 "symbol": getTVTicker(code),
-                "interval": "D",
+                "interval": interval,
                 "timezone": "Etc/UTC",
                 "theme": "light",
                 "style": "1",
@@ -197,8 +199,42 @@
                 "container_id": "tv-advanced-widget"
             });
 
+            // 更新按鈕樣式
+            document.querySelectorAll('.interval-btn').forEach(btn => btn.classList.remove('active', 'bg-indigo-600', 'text-white'));
+            const activeBtn = document.getElementById(`btn-${interval}`);
+            if (activeBtn) {
+                activeBtn.classList.add('active', 'bg-indigo-600', 'text-white');
+            }
+        };
+
+        window.openStockDetails = (code) => {
+            const info = currentPrices[code];
+            const name = watchlist.find(w => w.code === code)?.name || stocks.find(s => s.code === code)?.name || code;
+            document.getElementById('modal-title').innerText = `${name} (${code})`;
+            
+            // 插入週期切換按鈕 UI
+            const intervalUI = `
+                <div class="flex gap-2 mb-4 bg-slate-100 p-1 rounded-2xl">
+                    <button id="btn-60" onclick="loadTVChart('${code}', '60')" class="interval-btn flex-1 py-2 rounded-xl text-xs font-bold transition-all text-slate-500">1小時</button>
+                    <button id="btn-D" onclick="loadTVChart('${code}', 'D')" class="interval-btn flex-1 py-2 rounded-xl text-xs font-bold transition-all text-slate-500 active">日線</button>
+                    <button id="btn-W" onclick="loadTVChart('${code}', 'W')" class="interval-btn flex-1 py-2 rounded-xl text-xs font-bold transition-all text-slate-500">週線</button>
+                </div>
+            `;
+            
+            // 清理舊的切換鈕
+            const oldNav = document.getElementById('interval-nav');
+            if (oldNav) oldNav.remove();
+            
+            const navWrapper = document.createElement('div');
+            navWrapper.id = 'interval-nav';
+            navWrapper.innerHTML = intervalUI;
+            document.getElementById('modal-title').insertAdjacentElement('afterend', navWrapper);
+
+            // 預設載入日線圖
+            loadTVChart(code, 'D');
+
             document.getElementById('modal-actions').innerHTML = `
-                <div class="grid grid-cols-2 gap-3 mb-6">
+                <div class="grid grid-cols-2 gap-3 mb-6 mt-4">
                     <a href="https://tw.stock.yahoo.com/quote/${code}" target="_blank" class="bg-slate-100 text-slate-700 p-3 rounded-2xl text-center text-xs font-black">Yahoo 財經</a>
                     <a href="https://www.wantgoo.com/stock/${code}" target="_blank" class="bg-slate-100 text-slate-700 p-3 rounded-2xl text-center text-xs font-black">玩股網分析</a>
                 </div>
@@ -231,10 +267,12 @@
             document.getElementById('s-name').value = tx.name;
             document.getElementById('s-shares').value = tx.shares;
             document.getElementById('s-cost').value = tx.cost;
+            
             editingId = id;
             const saveBtn = document.getElementById('save-btn');
             saveBtn.innerText = "更新持股紀錄";
             saveBtn.classList.replace('bg-indigo-600', 'bg-orange-500');
+            saveBtn.classList.add('shadow-orange-500/20');
         };
 
         window.saveTransaction = async () => {
@@ -244,9 +282,6 @@
                     const idx = stocks.findIndex(s => s.id === editingId);
                     stocks[idx] = { ...stocks[idx], code, name: name || code, shares, cost };
                     editingId = null;
-                    const saveBtn = document.getElementById('save-btn');
-                    saveBtn.innerText = "存入雲端資產";
-                    saveBtn.classList.replace('bg-orange-500', 'bg-indigo-600');
                 } else {
                     stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
                 }
@@ -301,6 +336,7 @@
             const saveBtn = document.getElementById('save-btn');
             saveBtn.innerText = "存入雲端資產";
             saveBtn.classList.replace('bg-orange-500', 'bg-indigo-600');
+            saveBtn.classList.remove('shadow-orange-500/20');
         };
         window.authAction = async () => {
             const email = document.getElementById('email').value, pass = document.getElementById('pass').value;
@@ -392,6 +428,7 @@
             </div>
             
             <div id="tv-chart-container" class="mb-6"></div>
+            
             <div id="modal-actions"></div>
         </div>
     </div>
