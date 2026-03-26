@@ -3,32 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>台股雲端精算 Pro - 極致版</title>
+    <title>台股雲端精算 Pro - 終極版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f8fafc; }
         
         .up-red { color: #f43f5e; }
         .down-green { color: #10b981; }
-        .bg-up { background-color: #fff1f2; color: #e11d48; }
-        .bg-down { background-color: #f0fdf4; color: #16a34a; }
         
         /* 滾動條隱藏 */
         .no-scrollbar::-webkit-scrollbar { display: none; }
         
-        /* 玻璃擬態 */
-        .glass-card { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.3); }
-        
-        /* 行情卡片佈局 */
+        /* 行情卡片：手機一排兩個，確保不跑版 */
         .quo-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
         
-        /* 名稱截斷 */
-        .truncate-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+        /* 核心修復：名稱長度限制 */
+        .truncate-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }
+        .quo-card { min-width: 0; }
 
-        /* 動畫 */
+        /* 大盤動畫 */
         @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(244, 63, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, 0); } }
         .live-pulse { animation: pulse-red 2s infinite; }
     </style>
@@ -38,12 +34,8 @@
         import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-        // 費率設定 (可依券商調整)
-        const FEE_RATE = 0.001425;
-        const DISCOUNT = 0.6; 
-        const MIN_FEE = 1;
-        const TAX_ETF = 0.001;
-        const TAX_STOCK = 0.003;
+        const FEE_RATE = 0.001425, DISCOUNT = 0.6, MIN_FEE = 20; 
+        const TAX_ETF = 0.001, TAX_STOCK = 0.003;
 
         const firebaseConfig = {
             apiKey: "AIzaSyDsT-DHIht7TASNmb7GrUzJdAVxIlNNIMw",
@@ -58,11 +50,8 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        let currentUser = null;
-        let stocks = [];
-        let currentPrices = {};
-        let nightInfo = { tx: { price: 0, pct: 0, change: 0 } };
-        let chartInstance = null;
+        let currentUser = null, stocks = [], currentPrices = {}, nightInfo = { tx: { price: 0, pct: 0, change: 0 } }, marketIndex = { price: 0, change: 0, pct: 0 };
+        let chartInstance = null, editingId = null;
 
         onAuthStateChanged(auth, async (user) => {
             if (user) {
@@ -83,26 +72,28 @@
             render();
         }
 
-        // 精算損益
+        // 精算賣出所得與損益
         function getNet(shares, cost, nowPrice, code) {
             const isETF = code.startsWith('00') || code.startsWith('01');
             const tax = isETF ? TAX_ETF : TAX_STOCK;
-            const buyVal = shares * cost;
-            const sellVal = shares * nowPrice;
-            let f1 = Math.max(MIN_FEE, Math.floor(buyVal * FEE_RATE * DISCOUNT));
-            let f2 = Math.max(MIN_FEE, Math.floor(sellVal * FEE_RATE * DISCOUNT));
-            let t = Math.floor(sellVal * tax);
+            const buyVal = shares * cost, sellVal = shares * nowPrice;
+            const f1 = Math.max(MIN_FEE, Math.floor(buyVal * FEE_RATE * DISCOUNT));
+            const f2 = Math.max(MIN_FEE, Math.floor(sellVal * FEE_RATE * DISCOUNT));
+            const t = Math.floor(sellVal * tax);
             const profit = sellVal - buyVal - f1 - f2 - t;
-            return { val: Math.round(profit), pct: ((profit / (buyVal + f1)) * 100).toFixed(2) };
+            return { profit: Math.round(profit), pct: ((profit / (buyVal + f1)) * 100).toFixed(2), cash: Math.round(sellVal - f2 - t) };
         }
 
-        window.handleCodeInput = async (code) => {
-            if(code.length < 4) return;
-            const res = await fetch(`https://corsproxy.io/?https://query2.finance.yahoo.com/v1/finance/search?q=${code}`);
-            const data = await res.json();
-            const found = data.quotes.find(q => (q.symbol.includes('.TW') || q.symbol.includes('.TWO')));
-            if(found) document.getElementById('s-name').value = found.shortname || found.longname;
-        };
+        // 抓取大盤指數
+        async function fetchMarketIndex() {
+            try {
+                const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/^TWII`);
+                const d = await res.json();
+                const m = d.chart.result[0].meta;
+                marketIndex = { price: m.regularMarketPrice, change: (m.regularMarketPrice - m.previousClose).toFixed(2), pct: ((m.regularMarketPrice - m.previousClose) / m.previousClose * 100).toFixed(2) };
+                render();
+            } catch(e) { console.log("大盤數據異常"); }
+        }
 
         async function fetchPrice(code) {
             for(let s of ['.TW', '.TWO']) {
@@ -118,29 +109,28 @@
             }
         }
 
-        async function fetchNight() {
-            try {
-                const res = await fetch(`https://corsproxy.io/?https://query1.finance.yahoo.com/v8/finance/chart/WTX%3DF`);
-                const d = await res.json();
-                const m = d.chart.result[0].meta;
-                nightInfo.tx = { price: m.regularMarketPrice, change: (m.regularMarketPrice - m.previousClose).toFixed(0), pct: ((m.regularMarketPrice - m.previousClose) / m.previousClose * 100).toFixed(2) };
-                render();
-            } catch(e) {}
+        function startSync() { 
+            const sync = () => {
+                [...new Set(stocks.map(s => s.code))].forEach(fetchPrice);
+                fetchMarketIndex();
+                document.getElementById('update-time').innerText = `Updated: ${new Date().toLocaleTimeString()}`;
+            };
+            sync(); setInterval(sync, 15000);
         }
 
-        window.fetchAllData = () => {
-            [...new Set(stocks.map(s => s.code))].forEach(fetchPrice);
-            fetchNight();
-            document.getElementById('update-time').innerText = `更新於 ${new Date().toLocaleTimeString()}`;
-        };
-
-        function startSync() { fetchAllData(); setInterval(fetchAllData, 15000); }
-
         function render() {
-            const inv = document.getElementById('p-inv');
-            const quo = document.getElementById('p-quo');
-            const night = document.getElementById('p-night-box');
+            const inv = document.getElementById('p-inv'), quo = document.getElementById('p-quo');
             inv.innerHTML = ''; quo.innerHTML = '';
+
+            // 更新大盤顯示
+            const idxEl = document.getElementById('market-idx-box');
+            if (idxEl) {
+                const isUp = marketIndex.change >= 0;
+                idxEl.innerHTML = `
+                    <div class="text-center"><p class="text-2xl font-black ${isUp?'up-red':'down-green'}">${Math.round(marketIndex.price).toLocaleString()}</p><p class="text-[9px] text-slate-400 font-bold">加權指數 ${isUp?'+':''}${marketIndex.change}</p></div>
+                    <div class="text-center"><p class="text-2xl font-black text-slate-800">${marketIndex.pct}%</p><p class="text-[9px] text-slate-400 font-bold">當日漲跌幅</p></div>
+                `;
+            }
 
             const sum = {};
             stocks.forEach(s => {
@@ -152,76 +142,70 @@
             let gV = 0, gP = 0, gPaid = 0;
             Object.keys(sum).sort().forEach(code => {
                 const s = sum[code];
-                const net = getNet(s.shares, s.cost/s.shares, s.info.price, code);
+                const res = getNet(s.shares, s.cost/s.shares, s.info.price, code);
                 const isUp = s.info.price >= s.info.prev;
-                gV += (s.shares * s.info.price); gPaid += s.cost; gP += net.val;
+                gV += res.cash; gPaid += s.cost; gP += res.profit;
 
-                // 損益列表
                 inv.innerHTML += `
                     <div class="bg-white p-5 rounded-2xl border border-slate-100 flex justify-between items-center mb-3 shadow-sm active:scale-95 transition" onclick="openModal('${code}')">
-                        <div class="flex-1 overflow-hidden mr-4">
-                            <p class="font-black text-slate-800 text-base truncate-name" onclick="event.stopPropagation(); alert('${s.name}')">${s.name}</p>
-                            <p class="text-[10px] text-slate-400 font-bold">${code} · ${s.shares.toLocaleString()} 股</p>
+                        <div class="flex-1 overflow-hidden mr-4 min-w-0">
+                            <p class="font-black text-slate-800 text-base truncate-name">${s.name}</p>
+                            <p class="text-[10px] text-slate-400 font-bold uppercase">${code} · ${s.shares.toLocaleString()} 股</p>
                         </div>
                         <div class="text-right">
-                            <p class="${net.val >= 0 ? 'up-red' : 'down-green'} text-lg font-black">${net.val > 0 ? '+' : ''}${net.val.toLocaleString()}</p>
-                            <p class="text-[10px] text-slate-400 font-bold">${net.pct}%</p>
+                            <p class="${res.profit >= 0 ? 'up-red' : 'down-green'} text-lg font-black">${res.profit > 0 ? '+' : ''}${res.profit.toLocaleString()}</p>
+                            <p class="text-[10px] text-slate-400 font-bold">回收: ${res.cash.toLocaleString()}</p>
                         </div>
                     </div>`;
 
-                // 行情列表 (一行兩個)
                 quo.innerHTML += `
-                    <div class="bg-white p-4 rounded-2xl border border-slate-100 flex flex-col shadow-sm" onclick="alert('${s.name}')">
-                        <div class="flex justify-between items-start mb-2">
-                            <span class="text-[10px] font-black px-2 py-0.5 bg-slate-100 rounded-md text-slate-500">${code}</span>
+                    <div class="quo-card bg-white p-4 rounded-2xl border border-slate-100 flex flex-col shadow-sm min-w-0" onclick="alert('${s.name}')">
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="text-[9px] font-black px-1.5 py-0.5 bg-slate-50 rounded text-slate-400">${code}</span>
                             <span class="text-[10px] font-bold ${isUp ? 'up-red' : 'down-green'}">${isUp?'▲':'▼'}${Math.abs(s.info.pct)}%</span>
                         </div>
-                        <p class="text-xs font-bold text-slate-400 truncate-name mb-1">${s.name}</p>
-                        <p class="text-xl font-black font-mono ${isUp ? 'up-red' : 'down-green'}">${s.info.price.toFixed(2)}</p>
+                        <div class="min-w-0"><p class="text-[13px] font-bold text-slate-700 truncate-name mb-1">${s.name}</p></div>
+                        <p class="text-xl font-black font-mono tracking-tighter ${isUp ? 'up-red' : 'down-green'}">${s.info.price.toFixed(2)}</p>
                     </div>`;
             });
 
-            night.innerHTML = `
-                <div class="bg-slate-900 p-8 rounded-[2.5rem] text-center border-b-4 border-indigo-500 shadow-2xl">
-                    <div class="flex items-center justify-center gap-2 mb-2">
-                        <span class="w-2 h-2 rounded-full bg-red-500 live-pulse"></span>
-                        <p class="text-indigo-400 text-[10px] font-black tracking-widest uppercase">TX Night Session</p>
-                    </div>
-                    <h3 class="text-5xl font-black font-mono text-white mb-4">${nightInfo.tx.price}</h3>
-                    <div class="flex justify-center gap-4">
-                        <span class="px-4 py-1 rounded-full text-sm font-bold ${nightInfo.tx.change >= 0 ? 'bg-up' : 'bg-down'}">${nightInfo.tx.change > 0 ? '+' : ''}${nightInfo.tx.change}</span>
-                        <span class="px-4 py-1 rounded-full text-sm font-bold ${nightInfo.tx.pct >= 0 ? 'bg-up' : 'bg-down'}">${nightInfo.tx.pct}%</span>
-                    </div>
-                </div>`;
-            
             document.getElementById('total-v').innerText = `NT$ ${Math.round(gV).toLocaleString()}`;
-            document.getElementById('total-p').innerText = `預估淨損益 NT$ ${Math.round(gP).toLocaleString()} (${((gP/gPaid)*100).toFixed(2)}%)`;
+            document.getElementById('total-p').innerText = `預估損益 NT$ ${Math.round(gP).toLocaleString()} (${((gP/gPaid)*100).toFixed(2)}%)`;
             document.getElementById('total-p').className = `text-[11px] font-black px-4 py-1.5 rounded-full ${gP >= 0 ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-500'}`;
-            updateChart(sum);
         }
 
-        function updateChart(sum) {
-            const ctx = document.getElementById('assetChart');
-            if(chartInstance) chartInstance.destroy();
-            const labels = Object.values(sum).map(s => s.name);
-            const vals = Object.values(sum).map(s => s.shares * s.info.price);
-            chartInstance = new Chart(ctx, {
-                type: 'doughnut',
-                data: { labels, datasets: [{ data: vals, backgroundColor: ['#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6'], borderWidth: 4, borderColor: '#ffffff' }] },
-                options: { plugins: { legend: { display: false } }, cutout: '80%' }
-            });
-        }
-
+        // 修改與存入功能
         window.saveTransaction = async () => {
             const code = document.getElementById('s-code').value.trim();
             const name = document.getElementById('s-name').value.trim();
             const shares = parseFloat(document.getElementById('s-shares').value);
             const cost = parseFloat(document.getElementById('s-cost').value);
+            
             if(code && shares && cost) {
-                stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
+                if(editingId) {
+                    const idx = stocks.findIndex(s => s.id === editingId);
+                    stocks[idx] = { ...stocks[idx], code, name: name || code, shares, cost };
+                    editingId = null;
+                    document.getElementById('btn-save').innerText = "存入雲端數據";
+                } else {
+                    stocks.push({ id: Date.now(), code, name: name || code, shares, cost });
+                }
                 await setDoc(doc(db, "users", currentUser.uid), { stocks });
-                resetForm(); fetchAllData();
+                resetForm(); render();
             }
+        };
+
+        window.editTx = (id) => {
+            const r = stocks.find(s => s.id === id);
+            document.getElementById('s-code').value = r.code;
+            document.getElementById('s-name').value = r.name;
+            document.getElementById('s-shares').value = r.shares;
+            document.getElementById('s-cost').value = r.cost;
+            editingId = id;
+            document.getElementById('btn-save').innerText = "更新此筆紀錄";
+            document.querySelector('details').open = true;
+            closeModal();
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
         };
 
         window.deleteTx = async (id) => {
@@ -229,14 +213,18 @@
         };
 
         window.openModal = (code) => {
-            const m = document.getElementById('modal');
-            const c = document.getElementById('modal-content');
+            const m = document.getElementById('modal'), c = document.getElementById('modal-content');
             const list = stocks.filter(s => s.code === code);
             document.getElementById('modal-title').innerText = list[0].name;
             c.innerHTML = list.map(r => `
                 <div class="flex justify-between items-center p-4 bg-slate-50 rounded-xl mb-2">
-                    <p class="text-sm font-bold text-slate-600">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
-                    <button onclick="deleteTx(${r.id})" class="text-xs text-red-500 font-black">刪除</button>
+                    <div class="min-w-0">
+                        <p class="text-sm font-bold text-slate-600">${r.shares.toLocaleString()} 股 @ ${r.cost}</p>
+                    </div>
+                    <div class="flex gap-3">
+                        <button onclick="editTx(${r.id})" class="text-xs text-indigo-500 font-black">修改</button>
+                        <button onclick="deleteTx(${r.id})" class="text-xs text-red-400 font-bold">刪除</button>
+                    </div>
                 </div>`).join('');
             m.classList.remove('hidden');
         };
@@ -252,85 +240,77 @@
         window.logout = () => signOut(auth);
         window.resetForm = () => { document.getElementById('s-code').value=''; document.getElementById('s-name').value=''; document.getElementById('s-shares').value=''; document.getElementById('s-cost').value=''; document.querySelector('details').open=false; };
         window.authAction = async () => {
-            const email = document.getElementById('email').value;
-            const pass = document.getElementById('pass').value;
+            const email = document.getElementById('email').value, pass = document.getElementById('pass').value;
             try { await signInWithEmailAndPassword(auth, email, pass); } catch (e) { alert("登入失敗"); }
         };
     </script>
 </head>
-<body class="bg-slate-50 pb-32">
-
+<body class="pb-32">
     <div id="auth-page" class="flex flex-col items-center justify-center min-h-screen p-8 bg-slate-900">
         <div class="w-full max-w-sm">
-            <h1 class="text-white text-4xl font-black mb-2 text-center">台股精算 <span class="text-indigo-500">Pro</span></h1>
-            <p class="text-slate-500 text-center text-sm mb-10">Real-time Cloud Portfolio</p>
+            <h1 class="text-white text-4xl font-black mb-10 text-center">台股精算 <span class="text-indigo-500">Pro</span></h1>
             <div class="space-y-4">
-                <input type="email" id="email" placeholder="電子信箱" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
-                <input type="password" id="pass" placeholder="密碼" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
-                <button onclick="authAction()" class="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black text-lg">進入系統</button>
+                <input type="email" id="email" placeholder="Email" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
+                <input type="password" id="pass" placeholder="Password" class="w-full p-4 rounded-2xl bg-slate-800 text-white outline-none">
+                <button onclick="authAction()" class="w-full bg-indigo-600 text-white p-5 rounded-2xl font-black text-lg">登入</button>
             </div>
         </div>
     </div>
 
     <div id="main-page" class="hidden">
         <header class="px-6 py-8">
-            <div class="flex justify-between items-center mb-6">
+            <div class="flex justify-between items-start mb-6">
                 <div>
                     <h2 id="total-v" class="text-3xl font-black text-slate-900 tracking-tighter leading-none mb-2">NT$ 0</h2>
-                    <span id="total-p">--</span>
+                    <span id="total-p" class="px-4 py-1 rounded-full text-[10px] font-bold">載入中...</span>
                 </div>
-                <button onclick="logout()" class="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center border border-slate-100">
-                    <span class="text-xs">🚪</span>
-                </button>
+                <button onclick="logout()" class="w-10 h-10 rounded-full bg-white shadow-sm flex items-center justify-center text-xs">🚪</button>
             </div>
             
             <nav class="flex justify-between bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
-                <button onclick="switchTab('inv')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-indigo-600">持股</button>
-                <button onclick="switchTab('quo')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">行情</button>
-                <button onclick="switchTab('night')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">夜盤</button>
-                <button onclick="switchTab('ana')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">分析</button>
+                <button onclick="switchTab('inv')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-indigo-600">我的持股</button>
+                <button onclick="switchTab('quo')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">即時報價</button>
+                <button onclick="switchTab('ana')" class="tab-btn flex-1 py-3 rounded-xl text-sm font-black text-slate-400">盤勢分析</button>
             </nav>
         </header>
 
         <main class="px-6">
             <div id="p-inv"></div>
             <div id="p-quo" class="hidden quo-grid"></div>
-            <div id="p-night" class="hidden"><div id="p-night-box"></div></div>
             <div id="p-ana" class="hidden">
-                <div class="bg-white p-10 rounded-3xl shadow-sm border border-slate-100 flex justify-center">
-                    <div class="w-48 h-48"><canvas id="assetChart"></canvas></div>
-                </div>
+                <div id="market-idx-box" class="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-100 flex justify-around mb-6">
+                    </div>
+                <div class="bg-white p-6 rounded-[2rem] border border-slate-100"><canvas id="assetChart"></canvas></div>
             </div>
-            <p id="update-time" class="text-center text-[9px] text-slate-300 font-bold mt-6 uppercase tracking-widest"></p>
+            <p id="update-time" class="text-center text-[9px] text-slate-300 font-bold mt-6 tracking-widest"></p>
         </main>
 
         <div class="fixed bottom-6 left-0 right-0 px-6 z-40">
             <details class="bg-white rounded-[2rem] shadow-2xl border border-slate-200 overflow-hidden">
-                <summary class="list-none p-5 text-center font-black text-indigo-600 cursor-pointer">＋ 新增庫存紀錄</summary>
+                <summary class="list-none p-5 text-center font-black text-indigo-600 cursor-pointer">＋ 快速記錄交易</summary>
                 <div class="p-6 space-y-4 bg-slate-50">
                     <div class="grid grid-cols-2 gap-3">
-                        <input type="text" id="s-code" oninput="handleCodeInput(this.value)" placeholder="代碼" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
-                        <input type="text" id="s-name" placeholder="名稱" class="p-4 bg-white rounded-xl outline-none text-sm font-bold border border-slate-200">
+                        <input type="text" id="s-code" placeholder="代碼" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-100">
+                        <input type="text" id="s-name" placeholder="名稱" class="p-4 bg-white rounded-xl outline-none text-sm font-bold border border-slate-100">
                     </div>
                     <div class="grid grid-cols-2 gap-3">
-                        <input type="number" id="s-shares" placeholder="股數" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
-                        <input type="number" id="s-cost" placeholder="成本" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-200">
+                        <input type="number" id="s-shares" placeholder="股數" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-100">
+                        <input type="number" id="s-cost" placeholder="成本" class="p-4 bg-white rounded-xl outline-none text-sm border border-slate-100">
                     </div>
-                    <button onclick="saveTransaction()" class="w-full bg-indigo-600 text-white p-4 rounded-xl font-black">存入雲端數據</button>
+                    <button id="btn-save" onclick="saveTransaction()" class="w-full bg-indigo-600 text-white p-4 rounded-xl font-black">存入雲端數據</button>
                 </div>
             </details>
         </div>
     </div>
 
-    <div id="modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
-        <div class="bg-white w-full max-w-sm rounded-[2.5rem] p-8 shadow-2xl">
+    <div id="modal" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-t-[2.5rem] p-8 shadow-2xl">
             <div class="flex justify-between items-center mb-6">
                 <h3 id="modal-title" class="text-xl font-black text-slate-900"></h3>
-                <button onclick="closeModal()" class="text-slate-300 text-2xl">✕</button>
+                <button onclick="closeModal()" class="text-slate-300 text-xl">✕</button>
             </div>
             <div id="modal-content"></div>
         </div>
     </div>
-
 </body>
 </html>
