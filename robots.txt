@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://zjadfilm.com/sitemap.xml
